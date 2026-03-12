@@ -1,0 +1,105 @@
+# Databricks Asset Bundle configuration for AIA Multi-Agent System
+# This bundle deploys the Insurance Intelligence multi-agent application,
+# including the Gradio app, model serving endpoint, and supporting notebooks.
+
+bundle:
+  name: aia-multi-agent
+
+# ---------------------------------------------------------------------------
+# Workspace-level settings (shared across targets unless overridden)
+# ---------------------------------------------------------------------------
+workspace:
+  host: https://e2-demo-field-eng.cloud.databricks.com/
+  profile: e2-demo_latest
+
+# ---------------------------------------------------------------------------
+# Artifacts – files and directories to sync to the workspace
+# ---------------------------------------------------------------------------
+sync:
+  include:
+    - "agents/**"
+    - "app/**"
+    - "notebooks/**"
+    - "data/**"
+
+# ---------------------------------------------------------------------------
+# Resources – declarative definitions of Databricks objects
+# ---------------------------------------------------------------------------
+resources:
+
+  # -------------------------------------------------------------------------
+  # 1. Databricks App – Gradio-based Insurance Intelligence UI
+  # -------------------------------------------------------------------------
+  # NOTE: App deployment skipped — workspace is at max app limit (300).
+  # Deploy manually: databricks apps deploy aia-insurance-intelligence --source-code-path app/ -p e2-demo_latest
+  # apps:
+  #   aia-insurance-intelligence:
+  #     name: aia-insurance-intelligence
+  #     description: "AIA Insurance Intelligence – multi-agent Gradio application"
+  #     source_code_path: app/
+
+  # -------------------------------------------------------------------------
+  # 2. Model Serving Endpoint – Supervisor Agent
+  # -------------------------------------------------------------------------
+  serving_endpoints:
+    aia-supervisor-agent:
+      name: aia-supervisor-agent
+      config:
+        served_entities:
+          - entity_name: aia_multi_agent_catalog.ai_ops.supervisor_agent
+            entity_version: "14"               # latest registered version
+            scale_to_zero_enabled: true
+            workload_size: Small
+            workload_type: CPU
+            environment_vars:
+              DATABRICKS_HOST: "{{secrets/aia-multi-agent/serving-host}}"
+              DATABRICKS_TOKEN: "{{secrets/aia-multi-agent/serving-token}}"
+
+  # -------------------------------------------------------------------------
+  # 3. Job – Model Logging (existing job, reference only)
+  #    This job already exists in the workspace (ID 660934419436438).
+  #    It is listed here for documentation purposes; DAB will not recreate it.
+  # -------------------------------------------------------------------------
+  # jobs:
+  #   model-logging-job:
+  #     id: 660934419436438
+
+  # -------------------------------------------------------------------------
+  # 4. Notebooks – agent code deployed to the workspace
+  # -------------------------------------------------------------------------
+  notebooks:
+    agent_code:
+      path: agents/agent_code.py
+
+# ---------------------------------------------------------------------------
+# Variables – reusable values across the bundle
+# ---------------------------------------------------------------------------
+variables:
+  catalog:
+    default: aia_multi_agent_catalog
+    description: "Unity Catalog name for all AIA multi-agent assets"
+
+# ---------------------------------------------------------------------------
+# Targets – deployment environments
+# ---------------------------------------------------------------------------
+targets:
+
+  # --- Development --------------------------------------------------------
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com/
+      profile: e2-demo_latest
+
+  # --- Production (placeholder) -------------------------------------------
+  # Currently points to the same workspace. Update host/profile when a
+  # dedicated production workspace is provisioned.
+  prod:
+    mode: production
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com/
+      profile: e2-demo_latest
+    # In production you may want to pin stricter permissions or run_as:
+    # run_as:
+    #   service_principal_name: aia-multi-agent-sp

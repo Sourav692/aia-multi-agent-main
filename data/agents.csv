@@ -1,0 +1,51 @@
+agent_id,agent_name,region,channel,years_experience,certification_level,active_policies_count,total_premium_sold_usd,hire_date,is_active
+AGT-0001,Hui Tan,Singapore,Bancassurance,9,Associate,11,1701104.87,2005-11-13,True
+AGT-0002,Somchai Nguyen,Hong Kong,Digital,18,Associate,67,422457.11,2006-09-08,False
+AGT-0003,Emma Pham,Hong Kong,Bancassurance,14,Professional,31,1575878.83,2001-10-15,True
+AGT-0004,Lee Reyes,Singapore,Agency,25,Executive,327,3759914.18,2010-08-14,True
+AGT-0005,Siti Suzuki,Mainland China,Agency,24,Senior,410,4657538.64,2011-02-17,True
+AGT-0006,Li Rahman,Hong Kong,Broker,16,Professional,112,4092103.7,2020-08-24,True
+AGT-0007,Tan Ho,Singapore,Agency,7,Executive,178,1429085.15,2003-02-11,True
+AGT-0008,Arjun Rahman,Thailand,Digital,18,Senior,490,186622.65,2011-09-19,True
+AGT-0009,Kim Lim,Indonesia,Agency,14,Senior,383,3942819.48,2019-07-29,False
+AGT-0010,Mei Rahman,Mainland China,Broker,7,Senior,32,3558487.15,2000-01-28,False
+AGT-0011,Rizal Reyes,Taiwan,Digital,24,Professional,196,2184922.13,2014-10-23,False
+AGT-0012,Mei Patel,Singapore,Direct,17,Senior,351,2071544.9,2018-01-18,True
+AGT-0013,Raj Suzuki,Malaysia,Digital,13,Professional,325,2867071.01,2018-03-20,False
+AGT-0014,Wang Huang,South Korea,Agency,19,Senior,248,2236840.78,2009-08-02,False
+AGT-0015,Ahmad Reyes,Malaysia,Agency,17,Senior,57,4101196.15,2010-07-15,True
+AGT-0016,Raj Chen,Singapore,Agency,8,Executive,322,4256201.59,2003-04-08,True
+AGT-0017,Raj Sharma,Thailand,Digital,16,Executive,134,780478.16,2000-03-31,True
+AGT-0018,Tan Ng,Vietnam,Broker,23,Executive,35,2809158.68,2005-06-11,True
+AGT-0019,Nguyen Reyes,Hong Kong,Bancassurance,18,Senior,496,3788487.57,2019-11-08,False
+AGT-0020,Arjun Suzuki,Vietnam,Broker,18,Executive,469,837831.64,2021-04-17,True
+AGT-0021,Lee Santos,Singapore,Agency,25,Executive,330,1234267.03,2019-09-24,True
+AGT-0022,Lee Lin,Philippines,Agency,18,Associate,80,796611.76,2017-03-07,True
+AGT-0023,Xin Suzuki,Philippines,Bancassurance,18,Executive,222,358215.27,2018-11-05,True
+AGT-0024,Min Wijaya,Taiwan,Bancassurance,16,Associate,492,1791206.07,2017-06-29,True
+AGT-0025,Rizal Sari,Malaysia,Bancassurance,8,Executive,122,1401029.79,2021-10-13,True
+AGT-0026,Lisa Patel,Thailand,Agency,15,Professional,328,2693911.97,2017-09-03,False
+AGT-0027,Min Tan,Malaysia,Bancassurance,5,Executive,103,298908.94,2017-01-02,True
+AGT-0028,John Kumar,Singapore,Digital,13,Senior,395,4758460.39,2018-11-28,True
+AGT-0029,Maria Wong,South Korea,Digital,2,Senior,124,3268213.26,2001-10-21,True
+AGT-0030,Raj Wong,Taiwan,Bancassurance,8,Professional,252,3363821.28,2009-10-11,True
+AGT-0031,Emma Ng,Philippines,Bancassurance,24,Associate,408,4105540.81,2013-12-14,True
+AGT-0032,Wang Pham,Indonesia,Digital,13,Executive,492,3589322.79,2003-05-30,False
+AGT-0033,Lee Lee,Philippines,Digital,10,Associate,417,4920029.54,2001-11-03,True
+AGT-0034,Emma Tan,Malaysia,Bancassurance,11,Associate,444,2129290.77,2021-12-27,True
+AGT-0035,Emma Santos,Thailand,Broker,15,Professional,232,921877.96,2023-05-28,True
+AGT-0036,Rizal Wijaya,Indonesia,Bancassurance,14,Senior,175,4265980.14,2003-11-20,True
+AGT-0037,Lee Wijaya,South Korea,Bancassurance,20,Executive,182,192064.99,2014-07-31,True
+AGT-0038,Michael Sari,Malaysia,Agency,9,Senior,294,100248.02,2008-07-27,True
+AGT-0039,Robert Park,Singapore,Bancassurance,8,Executive,340,3573619.91,2020-02-07,True
+AGT-0040,Tan Rahman,Hong Kong,Digital,10,Senior,252,2789691.13,2015-06-03,True
+AGT-0041,Dewi Kumar,Mainland China,Agency,15,Senior,166,1294448.2,2005-05-30,True
+AGT-0042,Rizal Wijaya,Singapore,Digital,7,Professional,388,2446783.01,2023-07-14,False
+AGT-0043,Li Chan,Singapore,Agency,12,Professional,164,120034.42,2023-12-17,True
+AGT-0044,Hui Nguyen,Singapore,Agency,5,Executive,62,4369962.69,2012-10-02,True
+AGT-0045,Sarah Ng,Malaysia,Direct,9,Executive,68,4119472.44,2017-12-22,True
+AGT-0046,Hui Chen,Hong Kong,Agency,19,Senior,53,4969894.71,2005-04-24,False
+AGT-0047,Tan Wijaya,Vietnam,Bancassurance,15,Executive,162,4307825.0,2019-03-27,True
+AGT-0048,Hui Garcia,Malaysia,Direct,4,Professional,330,1094574.72,2003-08-23,True
+AGT-0049,Dewi Tan,Singapore,Agency,14,Executive,362,2989365.42,2013-01-23,True
+AGT-0050,Chen Sharma,Singapore,Broker,3,Professional,483,1359545.4,2008-11-15,True

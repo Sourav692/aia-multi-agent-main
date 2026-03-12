@@ -1,0 +1,4 @@
+dash>=2.14.0,<3.0.0
+dash-bootstrap-components>=1.5.0
+requests>=2.31.0
+databricks-sdk>=0.20.0

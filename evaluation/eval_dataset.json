@@ -1,0 +1,142 @@
+[
+  {
+    "question": "What is the total number of claims by region?",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
+    "expected_answer_contains": ["claims", "region", "total"]
+  },
+  {
+    "question": "What is the average claim amount for hospitalization claims in 2024?",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
+    "expected_answer_contains": ["average", "hospitalization", "claim amount"]
+  },
+  {
+    "question": "Show me the claim approval rate by claim type",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
+    "expected_answer_contains": ["approval rate", "claim type"]
+  },
+  {
+    "question": "What does the AIA Health plan cover?",
+    "expected_intent": "document_lookup",
+    "expected_domain": "policies",
+    "expected_agents": ["multi_tool"],
+    "expected_answer_contains": ["coverage", "health", "benefits"]
+  },
+  {
+    "question": "What are the exclusions in the Critical Illness policy?",
+    "expected_intent": "document_lookup",
+    "expected_domain": "policies",
+    "expected_agents": ["multi_tool"],
+    "expected_answer_contains": ["exclusion", "critical illness", "policy"]
+  },
+  {
+    "question": "Explain the waiting period for pre-existing conditions",
+    "expected_intent": "document_lookup",
+    "expected_domain": "policies",
+    "expected_agents": ["multi_tool"],
+    "expected_answer_contains": ["waiting period", "pre-existing"]
+  },
+  {
+    "question": "Which regions have the highest fraud scores and what patterns do you see?",
+    "expected_intent": "deep_analysis",
+    "expected_domain": "claims",
+    "expected_agents": ["analysis"],
+    "expected_answer_contains": ["fraud", "score", "region", "pattern"]
+  },
+  {
+    "question": "Are there any anomalies in our claims data from the last quarter?",
+    "expected_intent": "deep_analysis",
+    "expected_domain": "claims",
+    "expected_agents": ["analysis"],
+    "expected_answer_contains": ["anomaly", "claims", "analysis"]
+  },
+  {
+    "question": "Run a correlation analysis between claim amounts and fraud scores",
+    "expected_intent": "deep_analysis",
+    "expected_domain": "claims",
+    "expected_agents": ["analysis"],
+    "expected_answer_contains": ["correlation", "claim amount", "fraud"]
+  },
+  {
+    "question": "Create a dashboard showing claims trends by region over time",
+    "expected_intent": "visualization",
+    "expected_domain": "claims",
+    "expected_agents": ["genie", "visualization"],
+    "expected_answer_contains": ["dashboard", "claims", "region", "trend"]
+  },
+  {
+    "question": "Show me a chart of policy premium distribution by product type",
+    "expected_intent": "visualization",
+    "expected_domain": "products",
+    "expected_agents": ["genie", "visualization"],
+    "expected_answer_contains": ["chart", "premium", "product"]
+  },
+  {
+    "question": "Build a visual report of agent performance metrics",
+    "expected_intent": "visualization",
+    "expected_domain": "distribution",
+    "expected_agents": ["genie", "visualization"],
+    "expected_answer_contains": ["agent", "performance", "dashboard"]
+  },
+  {
+    "question": "How do claims patterns relate to agent performance across different product lines?",
+    "expected_intent": "multi_domain",
+    "expected_domain": "unknown",
+    "expected_agents": ["genie", "multi_tool", "analysis"],
+    "expected_answer_contains": ["claims", "agent", "product"]
+  },
+  {
+    "question": "Compare fraud rates across regions and correlate with policy types and distribution channels",
+    "expected_intent": "multi_domain",
+    "expected_domain": "unknown",
+    "expected_agents": ["genie", "multi_tool", "analysis"],
+    "expected_answer_contains": ["fraud", "region", "policy", "distribution"]
+  },
+  {
+    "question": "Give me a complete overview of our Hong Kong business including claims, policies, and agent stats",
+    "expected_intent": "multi_domain",
+    "expected_domain": "unknown",
+    "expected_agents": ["genie", "multi_tool", "analysis"],
+    "expected_answer_contains": ["Hong Kong", "claims", "policies", "agent"]
+  },
+  {
+    "question": "Show me the top 5 agents by total premium sold",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "distribution",
+    "expected_agents": ["genie"],
+    "expected_answer_contains": ["agent", "premium", "top"]
+  },
+  {
+    "question": "How many suspicious claims were filed in 2024?",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
+    "expected_answer_contains": ["suspicious", "claims", "2024"]
+  },
+  {
+    "question": "What are the policy renewal rates?",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "policies",
+    "expected_agents": ["genie"],
+    "expected_answer_contains": ["renewal", "rate", "policy"]
+  },
+  {
+    "question": "Tell me about insurance",
+    "expected_intent": "simple_kpi",
+    "expected_domain": "unknown",
+    "expected_agents": ["multi_tool"],
+    "expected_answer_contains": ["insurance"]
+  },
+  {
+    "question": "Detect outliers in claim processing times and visualize the distribution",
+    "expected_intent": "deep_analysis",
+    "expected_domain": "claims",
+    "expected_agents": ["analysis", "visualization"],
+    "expected_answer_contains": ["outlier", "processing time", "distribution"]
+  }
+]
