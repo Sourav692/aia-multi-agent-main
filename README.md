@@ -170,7 +170,7 @@ A production-grade Multi-Agent System on Databricks that answers natural languag
 | `simple_kpi` | "Total claims by region?" | Genie Agent |
 | `deep_analysis` | "Any anomalies in claims?" | Data Analysis Agent |
 | `document_lookup` | "What does health plan cover?" | Multi-Tool Agent (RAG) |
-| `multi_domain` | "Agent churn vs claim ratio?" | All agents (parallel) |
+| `conversational` | "Hi, I'm Sarah from claims" | Direct response (no agent) |
 | `visualization` | "Create a dashboard for claims by country" | Visualization Agent |
 
 ---
@@ -218,16 +218,14 @@ User: "Create a dashboard for number of claims per country"
                      View it here: [Dashboard Link]"
 ```
 
-### Flow 5: Multi-Domain Question
+### Flow 5: Conversational Question
 ```
-User: "Which agents have the highest churn rate vs claim ratio?"
+User: "Hi, I'm Sarah from the claims team"
 
-1. classify_intent → multi_domain (85% confidence)
-2. resolve_assets → domain: cross_domain, tables: [agent_performance, claims_summary]
-3. run_all_agents → Phase 1: Genie + Multi-Tool (parallel)
-                    Phase 2: Analysis (sequential)
-                    Phase 3: Visualization (sequential)
-4. compose_answer → synthesized answer from all agent results
+1. classify_intent → conversational (95% confidence)
+2. resolve_assets → minimal resolution (conversational intent)
+3. route_by_intent → compose_answer (direct, no worker agent)
+4. compose_answer → "Hello Sarah! I'm your insurance analytics assistant..."
 ```
 
 ### Flow 6: Ambiguous Question (Clarification)

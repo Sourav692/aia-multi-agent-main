@@ -85,12 +85,12 @@ SupervisorResponsesAgent.predict()
 │              │    │  │                                      │
 │    ┌─────────┘    │  └──────────┐                           │
 │    ▼              ▼             ▼                           │
-│ ┌──────┐   ┌───────────┐  ┌───────────┐                    │
-│ │genie │   │multi_tool  │  │all_agents │                    │
-│ │      │   │            │  │(parallel) │                    │
-│ └──┬───┘   └─────┬──────┘  └─────┬─────┘                   │
-│    │             │               │                          │
-│    └─────────────┴───────────────┘                          │
+│ ┌──────┐   ┌───────────┐  ┌───────────────┐                │
+│ │genie │   │multi_tool  │  │compose_answer │                │
+│ │      │   │            │  │(conversational)│               │
+│ └──┬───┘   └─────┬──────┘  └──────┬────────┘               │
+│    │             │                │                         │
+│    └─────────────┴────────────────┘                         │
 │                  │                                          │
 │                  ▼                                          │
 │         ┌────────────────┐                                  │
@@ -187,7 +187,7 @@ The prompt asks the LLM to classify the question into exactly one of three categ
 |--------|-------------|---------|
 | `simple_kpi` | Simple KPI/metric questions — counts, totals, averages, trends | "Total claims by region?" |
 | `document_lookup` | Policy terms, coverage details, exclusions, procedures | "What does the health plan cover?" |
-| `multi_domain` | Questions spanning multiple domains or data sources | "Agent churn vs claim ratio?" |
+| `conversational` | Greetings, introductions, personal statements, small talk | "Hi, I'm Sarah from the claims team" |
 
 The LLM returns a JSON response:
 ```json
@@ -208,7 +208,7 @@ The node sets `needs_clarification = True` if:
 
 | Field | Updated To |
 |-------|-----------|
-| `intent` | One of: `simple_kpi`, `document_lookup`, `multi_domain` |
+| `intent` | One of: `simple_kpi`, `document_lookup`, `conversational` |
 | `intent_confidence` | Float 0.0–1.0 |
 | `needs_clarification` | Boolean |
 | `_missing_filters` | List of missing filter names (internal) |
@@ -248,28 +248,25 @@ This is where the Supervisor discovers **which data assets** are relevant to the
 
 #### How it works:
 
-1. **Vector Search query** — The user's question is sent as a semantic query to the Context Index Vector Search endpoint (`aia_context_index_vs`), retrieving the top 10 matching assets.
+1. **Vector Search query** — The user's question is sent as a semantic query to the Context Index Vector Search endpoint (`aia_context_index_vs`), retrieving the top 10 matching assets. The query includes the `metadata` column so that worker-specific configuration (e.g., the VS index name for document indexes) can be extracted at resolution time.
 
-2. **Assets returned** include:
-   - **Genie Spaces** — For Text-to-SQL queries
-   - **Metric Views** — Governed KPI definitions
-   - **Tables** — Unity Catalog tables (bronze/silver/gold)
-   - **Document Indexes** — Vector Search indexes for RAG
-   - **Dashboards** — AI/BI dashboard references
+2. **Asset types** in the Context Index:
+   - **Genie Spaces** — For Text-to-SQL queries. The `asset_id` is the Genie Space ID used directly by the Genie worker agent.
+   - **Document Indexes** — For RAG over policy documents. The `metadata` JSON contains a `vs_index` field that tells the Multi-Tool agent which Vector Search index to query.
 
 3. **Endorsed asset prioritization** — Results are sorted so that assets with `endorsement_level = "endorsed"` appear first, followed by score-based ranking. This ensures governed, curated assets are preferred over experimental ones.
 
-4. **Domain detection** — The primary domain (e.g., `claims`, `policies`, `products`, `distribution`) is determined by counting the most frequent domain among the top 5 results.
+4. **Domain detection** — The primary domain (e.g., `claims`, `policies`, `documents`) is determined by counting the most frequent domain among the top 5 results.
 
-5. **State update** — The `resolved_assets` dictionary is populated:
+5. **VS index extraction** — For the first matched `document_index` asset, the `metadata` JSON is parsed to extract the `vs_index` field. This allows the Multi-Tool agent to dynamically discover which Vector Search index to query, rather than relying on a hardcoded constant.
+
+6. **State update** — The `resolved_assets` dictionary is populated:
    ```python
    state["resolved_assets"] = {
        "domain": "claims",
        "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
-       "metric_views": ["claims.mv_claims_count", ...],
-       "tables": ["gold.claims_summary", "silver.enriched_claims"],
        "document_indexes": ["bronze.policy_documents"],
-       "dashboards": [...],
+       "doc_vs_index": "aia_multi_agent_catalog.ai_ops.policy_docs_vs",
        "all_assets": [...],          # Full asset list
        "endorsement_info": {...},     # asset_id → endorsement_level
    }
@@ -277,10 +274,16 @@ This is where the Supervisor discovers **which data assets** are relevant to the
 
 #### Fallback
 
-If the Context Index is unavailable (e.g., during initial setup), a **rule-based default** is used based on the intent:
-- `simple_kpi` → `gold.claims_summary`, `gold.policy_performance`
-- `document_lookup` → `bronze.policy_documents`
-- `multi_domain` → `gold.claims_summary`, `gold.agent_performance`, `silver.customer_360`
+If the Context Index is unavailable (e.g., during initial setup), a **rule-based default** is used with a hardcoded Genie Space ID and document VS index:
+```python
+{
+    "domain": "claims",
+    "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
+    "document_indexes": ["aia_multi_agent_catalog.bronze.policy_documents"],
+    "doc_vs_index": "aia_multi_agent_catalog.ai_ops.policy_docs_vs",
+    ...
+}
+```
 
 ---
 
@@ -300,7 +303,7 @@ If the registry has no matches or isn't available:
 
 | Intent | Condition | Routes To |
 |--------|-----------|-----------|
-| `multi_domain` | Always | `all_agents` (Genie + Multi-Tool in parallel) |
+| `conversational` | Always | `compose_answer` (direct response, no agent) |
 | `document_lookup` | Always | `multi_tool` (RAG over policy documents) |
 | `simple_kpi` | Genie Space resolved | `genie` (Text-to-SQL via Genie API) |
 | `simple_kpi` | No Genie Space | `multi_tool` (fallback) |
@@ -316,38 +319,28 @@ Based on the routing decision, one of three paths is taken:
 
 **Node:** `route_to_genie` | **Span Type:** `TOOL`
 
-1. Reads the Genie Space ID from `ai_ops.agent_config` (falls back to a hardcoded ID).
+1. Reads the Genie Space ID from `state["resolved_assets"]["genie_space"]` — this ID was dynamically resolved from the Context Index in Step 3.
 2. Calls the **Databricks Genie API** to start a conversation with the user's question.
 3. Polls the Genie API (up to 30 iterations, 2 seconds apart) until the query completes.
 4. Extracts:
    - The **SQL query** Genie generated
    - The **result summary** (natural language)
-5. If Genie fails, performs a **scoped Context Index lookup** for additional metric views or tables in the same domain.
+5. If Genie fails, performs a **scoped Context Index lookup** for additional Genie Spaces in the same domain.
 6. Records **asset feedback** when Genie cannot answer a query, enabling governance teams to improve Genie Spaces over time.
 
-**State update:** `state["genie_results"]` with `sql`, `result_summary`, `status`
+**State update:** `state["genie_results"]` with `space_id`, `sql`, `result_summary`, `status`
 
 #### Path B: Multi-Tool Agent (RAG)
 
 **Node:** `route_to_multi_tool` | **Span Type:** `TOOL`
 
-1. Queries the **Policy Documents Vector Search index** (`bronze.policy_documents_vs`) with the user's question.
-2. Retrieves the **top 5 matching document chunks**, each containing:
+1. Reads the document VS index name from `state["resolved_assets"]["doc_vs_index"]` — this was dynamically resolved from the `document_index` asset's `metadata.vs_index` field in Step 3.
+2. Queries the resolved **Policy Documents Vector Search index** with the user's question.
+3. Retrieves the **top 5 matching document chunks**, each containing:
    - `document_id`, `title`, `content`, `document_type`, `category`
-3. Returns the retrieved documents for use in answer composition.
+4. Returns the retrieved documents for use in answer composition.
 
 **State update:** `state["multi_tool_results"]` with `docs`, `status`
-
-#### Path C: All Agents (Parallel Execution)
-
-**Node:** `run_all_agents` | **Span Type:** `CHAIN`
-
-For `multi_domain` questions, both Genie and Multi-Tool agents run **in parallel** using Python's `ThreadPoolExecutor`:
-
-1. Deep-copies the state for each agent to prevent interference.
-2. Submits both `route_to_genie` and `route_to_multi_tool` as concurrent futures.
-3. Waits for both to complete.
-4. Merges results and warnings back into the main state.
 
 ---
 
@@ -417,13 +410,13 @@ The final response includes:
   "intent": "simple_kpi",
   "intent_confidence": 0.92,
   "domain": "claims",
-  "resolved_tables": ["gold.claims_summary"],
-  "resolved_genie_spaces": [],
+  "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
+  "doc_vs_index": "aia_multi_agent_catalog.ai_ops.policy_docs_vs",
   "warnings": [],
   "clarification": null,
   "nodes_executed": ["classify_intent", "resolve_assets", "genie", "compose_answer"],
   "agent_details": {
-    "genie": {"status": "success", "sql": "SELECT region, COUNT(*)...", "row_count": 5}
+    "genie": {"status": "success", "space_id": "01f0d6ff25da1f229950bb97c1ec974c", "sql": "SELECT region, COUNT(*)...", "row_count": 5}
   },
   "thread_id": "abc123",
   "checkpoint_id": "a1b2c3d4"
@@ -470,8 +463,8 @@ The Supervisor uses a layered memory architecture:
 | Component | Table/Index | Cache TTL | Purpose |
 |-----------|-------------|-----------|---------|
 | Prompt Management | `ai_ops.agent_instructions` | 5 min | Table-driven prompts with overlay support |
-| Context Index | `ai_ops.context_index_vs` | — | Semantic asset discovery via Vector Search |
-| Policy Documents | `bronze.policy_documents_vs` | — | RAG retrieval for document questions |
+| Context Index | `ai_ops.context_index_vs` | — | Semantic asset discovery via Vector Search (Genie Spaces + Document Indexes) |
+| Policy Documents | Resolved from Context Index `metadata.vs_index` | — | RAG retrieval for document questions |
 
 ### P2 — Long-Term Learning
 
@@ -494,12 +487,12 @@ Phase 1: Tool Registry (P2, if available)
     ├── Load active capabilities from ai_ops.agent_capabilities
     ├── Filter by: supported_intents contains current intent
     ├── Sort by: priority (ascending, lower = higher priority)
-    └── If match found (and intent ≠ multi_domain) → route to matched agent
+    └── If match found → route to matched agent
     │
     ▼
 Phase 2: Hardcoded Fallback
     │
-    ├── multi_domain → all_agents (parallel execution)
+    ├── conversational → compose_answer (direct response)
     ├── document_lookup → multi_tool (RAG)
     ├── simple_kpi + has genie_space → genie
     ├── simple_kpi + no genie_space → multi_tool
@@ -517,16 +510,18 @@ The tool registry enables adding new agents without code changes — simply inse
 | Aspect | Detail |
 |--------|--------|
 | **API** | Databricks Genie Space API (`w.genie.start_conversation`, `w.genie.get_message`) |
+| **Space ID source** | Dynamically resolved from Context Index (`resolved_assets.genie_space`) |
 | **Function** | Translates natural language into SQL via curated Genie Spaces |
-| **Returns** | Generated SQL, result summary, row count |
-| **Fallback** | Scoped Context Index lookup for additional metric views |
+| **Returns** | Space ID, generated SQL, result summary, row count |
+| **Fallback** | Scoped Context Index lookup for alternative Genie Spaces in the same domain |
 | **Feedback** | Records `genie_query_failed` to `ai_ops.asset_feedback` on failure |
 
-### Multi-Tool Agent (Generalist / RAG)
+### Multi-Tool Agent (RAG)
 
 | Aspect | Detail |
 |--------|--------|
 | **API** | Databricks Vector Search (`w.vector_search_indexes.query_index`) |
+| **VS index source** | Dynamically resolved from Context Index (`resolved_assets.doc_vs_index`, extracted from `document_index` asset metadata) |
 | **Function** | Retrieves relevant policy document chunks via semantic similarity |
 | **Returns** | Up to 5 document chunks with title, content, type, and category |
 | **Use case** | Policy coverage, terms, exclusions, procedures |
@@ -548,7 +543,6 @@ Every node in the pipeline is instrumented with **MLflow Tracing**:
 @mlflow.trace(name="route_to_genie", span_type=SpanType.TOOL)
 @mlflow.trace(name="route_to_multi_tool", span_type=SpanType.TOOL)
 @mlflow.trace(name="compose_answer", span_type=SpanType.CHAIN)
-@mlflow.trace(name="run_all_agents", span_type=SpanType.CHAIN)
 ```
 
 The `predict()` method itself is traced with `SpanType.AGENT`, creating a parent span for the entire request.
@@ -589,20 +583,19 @@ The Chat UI renders a "Thinking..." panel showing each node that executed, its s
 | 6 | `compose_answer` | Synthesize answer | "The AIA Health Premium Plan covers hospitalization, surgical..." |
 | 7 | `predict()` | Save checkpoint, log episode | Checkpoint saved |
 
-### Example 3: Multi-Domain Question
+### Example 3: Conversational Question
 
-> **User:** "Which agents have the highest churn rate vs claim ratio?"
+> **User:** "Hi, I'm Sarah from the claims team"
 
 | Step | Node | Action | Result |
 |------|------|--------|--------|
 | 0 | `predict()` | Initialize state | Fresh state |
-| 1 | `classify_intent` | Classify question | `multi_domain` (85% confidence) |
-| — | `should_clarify` | Check confidence | 85% > 60% → skip clarification |
-| 3 | `resolve_assets` | Query Context Index | domain: `cross_domain`, multiple tables |
-| 4 | `route_by_intent` | Route decision | `multi_domain` → route to `all_agents` |
-| 5 | `run_all_agents` | Parallel execution | Genie + Multi-Tool run concurrently |
-| 6 | `compose_answer` | Synthesize answer | Fused answer from both agent results |
-| 7 | `predict()` | Save checkpoint, log episode | Both agents recorded |
+| 1 | `classify_intent` | Classify question | `conversational` (95% confidence) |
+| — | `should_clarify` | Check confidence | 95% > 60% → skip clarification |
+| 3 | `resolve_assets` | Query Context Index | Minimal resolution (conversational intent) |
+| 4 | `route_by_intent` | Route decision | `conversational` → route directly to `compose_answer` |
+| 5 | `compose_answer` | Generate greeting | "Hello Sarah! I'm your insurance analytics assistant..." |
+| 6 | `predict()` | Save checkpoint, extract user memory | Name preference saved |
 
 ### Example 4: Ambiguous Question with Clarification
 
@@ -641,7 +634,7 @@ The Chat UI renders a "Thinking..." panel showing each node that executed, its s
 | **Catalog** | `aia_multi_agent_catalog` | `agent_code.py` |
 | **Context Index VS** | `aia_multi_agent_catalog.ai_ops.context_index_vs` | `agent_code.py` |
 | **VS Endpoint** | `aia_context_index_vs` | `agent_code.py` |
-| **Document VS Index** | `aia_multi_agent_catalog.bronze.policy_documents_vs` | `agent_code.py` |
+| **Document VS Index** | Resolved dynamically from Context Index `document_index` asset `metadata.vs_index` | `resolve_assets_with_context_index()` |
 | **SQL Warehouse ID** | `4b9b953939869799` | `agent_code.py` |
 | **Serving Endpoint** | `aia-supervisor-agent` | `databricks.yml` |
 | **Prompt Cache TTL** | 5 minutes | `_load_prompts()` |

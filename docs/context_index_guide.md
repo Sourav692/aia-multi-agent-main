@@ -18,7 +18,7 @@ This document explains what the Context Index is, how it is built, how it is con
 8. [Adding New Assets](#8-adding-new-assets)
 9. [Example 1 — Simple KPI Question (Claims by Region)](#9-example-1--simple-kpi-question-claims-by-region)
 10. [Example 2 — Document Lookup (Policy Coverage)](#10-example-2--document-lookup-policy-coverage)
-11. [Example 3 — Multi-Domain Question with Scoped Lookup Fallback](#11-example-3--multi-domain-question-with-scoped-lookup-fallback)
+11. [Example 3 — Genie Failure with Scoped Lookup Fallback](#11-example-3--genie-failure-with-scoped-lookup-fallback)
 12. [Troubleshooting](#12-troubleshooting)
 
 ---
@@ -287,11 +287,11 @@ state["resolved_assets"] = {
 
 If the Vector Search index is unavailable (e.g., endpoint is offline, network error), the system falls back to **hardcoded default assets** based on the classified intent:
 
-| Intent | Default Tables |
+| Intent | Default Assets |
 |--------|---------------|
-| `simple_kpi` | `gold.claims_summary`, `gold.policy_performance` |
-| `document_lookup` | `bronze.policy_documents` |
-| `multi_domain` | `gold.claims_summary`, `gold.agent_performance`, `silver.customer_360` |
+| `simple_kpi` | Default `genie_space` + `doc_vs_index` |
+| `document_lookup` | Default `genie_space` + `doc_vs_index` |
+| `conversational` | Default `genie_space` + `doc_vs_index` |
 
 A warning is added: *"Context Index not ready — using rule-based asset resolution"*
 
@@ -668,25 +668,25 @@ compose_answer → "The AIA Health Premium Plan covers hospitalization..."
 
 ---
 
-## 11. Example 3 — Multi-Domain Question with Scoped Lookup Fallback
+## 11. Example 3 — Genie Failure with Scoped Lookup Fallback
 
-> **User:** "Which agents have the highest churn rate compared to their claim settlement ratio?"
+> **User:** "What is the average claim settlement time by region for Q4?"
 
 ### Step-by-Step Walkthrough
 
-This example demonstrates the more complex multi-domain flow and illustrates how the **scoped Context Index lookup** is used as a fallback when the Genie Agent fails.
+This example demonstrates how the **scoped Context Index lookup** is used as a fallback when the Genie Agent fails to answer a `simple_kpi` question.
 
 #### 1. Intent Classification
 
 ```json
 {
-  "intent": "multi_domain",
-  "confidence": 0.85,
+  "intent": "simple_kpi",
+  "confidence": 0.90,
   "missing_filters": []
 }
 ```
 
-The question spans two domains: agent performance (distribution) and claims settlement (claims).
+The question is a straightforward KPI query about claim settlement times.
 
 #### 2. Context Index Query
 
@@ -696,48 +696,38 @@ The question is sent to the Vector Search index.
 
 | Rank | Asset Type | Display Name | Domain | Score | Endorsement |
 |------|-----------|--------------|--------|-------|-------------|
-| 1 | `metric_view` | Agent Productivity Metric View | distribution | 0.83 | endorsed |
-| 2 | `table` | Agent Performance Table | distribution | 0.78 | endorsed |
-| 3 | `genie_space` | Bajaj Demo Genie Space | claims | 0.72 | endorsed |
-| 4 | `metric_view` | Claims Count Metric View | claims | 0.65 | endorsed |
-| 5 | `table` | Claims Summary Table | claims | 0.61 | endorsed |
+| 1 | `genie_space` | Bajaj Demo Genie Space | claims | 0.82 | endorsed |
+| 2 | `document_index` | Policy Documents Index | claims | 0.65 | endorsed |
 
 **Why these results?**
-- "Churn rate" strongly matches the **Agent Productivity Metric View** whose `text` includes: *"churn rate by agent, region, and channel"*
-- "Agents" and "performance" match the **Agent Performance Table** whose `text` includes: *"policies sold, premium generated, customer count, active vs churned policies, and churn rate percentage"*
-- "Claim settlement ratio" brings in claims-domain assets
-- The Genie Space matches broadly
+- "Claim settlement time" and "region" match the **Genie Space** whose `text` includes claims-related KPIs
+- The document index matches broadly on "claims" terms
 
 #### 3. Resolved Assets
-
-The domain detection counts: `distribution` appears 2 times, `claims` appears 3 times among the top 5. Primary domain: `claims`.
 
 ```python
 state["resolved_assets"] = {
     "domain": "claims",
     "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
-    "metric_views": ["gold.mv_agent_productivity", "gold.mv_claims_count"],
-    "tables": ["gold.agent_performance", "gold.claims_summary"],
-    "document_indexes": [],
-    "dashboards": [],
-    ...
+    "doc_vs_index": "aia_multi_agent_catalog.ai_ops.policy_docs_vs",
+    "document_indexes": ["aia_multi_agent_catalog.bronze.policy_documents"],
+    "all_assets": [...],
+    "endorsement_info": {...},
 }
 ```
 
 #### 4. Routing Decision
 
 `route_by_intent()` evaluates:
-- Intent is `multi_domain`
-- Decision: **route to `all_agents`** (hardcoded rule: `multi_domain` always runs all agents in parallel)
+- Intent is `simple_kpi`
+- Genie Space is resolved
+- Decision: **route to `genie`**
 
-#### 5. Agent Execution — Parallel
-
-Both agents run concurrently via `ThreadPoolExecutor`:
+#### 5. Agent Execution — Genie with Fallback
 
 **Genie Agent path:**
-- Calls Genie Space API with the complex cross-domain question
-- Genie may struggle with this question because it spans two domains (agent churn + claims settlement)
-- Scenario: Genie returns `status: "failed"` — unable to generate valid SQL for this cross-domain query
+- Calls Genie Space API with the question
+- Scenario: Genie returns `status: "failed"` — unable to generate valid SQL (e.g., the required column doesn't exist in the Genie Space's tables)
 
 **When Genie fails, the scoped Context Index lookup kicks in:**
 
@@ -748,7 +738,7 @@ domain = state.get("resolved_assets", {}).get("domain", "claims")
 if genie_res.get("status") != "success" or not genie_res.get("sql"):
     extra = _scoped_context_index_lookup(
         question, domain,
-        asset_types=["metric_view", "genie_space", "table"],
+        asset_types=["genie_space"],
         num_results=3,
     )
 ```
@@ -756,14 +746,13 @@ if genie_res.get("status") != "success" or not genie_res.get("sql"):
 This scoped lookup:
 1. Queries the Context Index again with the user question
 2. Filters results to **only** assets in the `claims` domain (the Supervisor's resolved domain)
-3. Filters to only `metric_view`, `genie_space`, and `table` types
+3. Filters to only `genie_space` types
 4. Returns up to 3 results as enrichment context
 
 The enrichment results are attached to the Genie results:
 ```python
 genie_res["ci_enrichment"] = [
-    {"asset_id": "gold.mv_claims_count", "display_name": "Claims Count Metric View", "asset_type": "metric_view"},
-    {"asset_id": "gold.claims_summary", "display_name": "Claims Summary Table", "asset_type": "table"},
+    {"asset_id": "01f0d6ff25da1f229950bb97c1ec974c", "display_name": "Bajaj Demo Genie Space", "asset_type": "genie_space"},
 ]
 ```
 
@@ -771,71 +760,60 @@ Additionally, asset feedback is recorded for governance:
 ```python
 _record_asset_feedback(
     "genie", "claims", "genie_query_failed",
-    "Genie could not answer: Which agents have the highest churn rate compared to their claim...",
+    "Genie could not answer: What is the average claim settlement time by region for Q4?",
     state
 )
 ```
-
-**Multi-Tool Agent path:**
-- Performs Vector Search RAG over policy documents
-- May find some related documents about claims procedures
-- Returns any relevant document chunks
 
 #### 6. Answer Composition
 
 The compose step receives:
 - Genie results: `failed` with `ci_enrichment` metadata pointing to alternative assets
-- Multi-Tool results: retrieved document chunks (if relevant)
-- Episodic lessons from past `multi_domain` + `claims` interactions
+- No Multi-Tool results (Genie path only for `simple_kpi`)
+- Episodic lessons from past `simple_kpi` + `claims` interactions
 
-The LLM synthesizes what it can from the available data:
+The LLM synthesizes a response acknowledging the limitation:
 
-> "This is a cross-domain question spanning agent performance and claims data. Based on the available agent productivity metrics, the top agents by churn rate are... The claims settlement ratio data suggests..."
+> "I wasn't able to retrieve the average claim settlement time by region for Q4 from the current data sources. This metric may require additional table configuration in the Genie Space. Please reach out to the data team to verify the availability of settlement time data."
 
 #### Flow Diagram
 
 ```
-"Which agents have the highest churn rate compared to their claim settlement ratio?"
+"What is the average claim settlement time by region for Q4?"
     │
     ▼
-classify_intent → multi_domain (85%)
+classify_intent → simple_kpi (90%)
     │
     ▼
 resolve_assets_with_context_index
-    │  Query: "Which agents have the highest churn rate..."
-    │  Top matches: Agent Productivity MV (0.83), Agent Performance Table (0.78)
-    │  Domain: claims (3/5 top results)
+    │  Query: "What is the average claim settlement time..."
+    │  Top matches: Bajaj Demo Genie Space (0.82)
+    │  Domain: claims
     │  Genie Space: found ✓
     │
     ▼
-route_by_intent → all_agents (multi_domain always runs all)
+route_by_intent → genie (simple_kpi + has genie_space)
     │
-    ├─────────────────────────┐
-    │                         │
-    ▼                         ▼
-route_to_genie            route_to_multi_tool
-    │                         │
-    │  Genie FAILS ✗          │  RAG retrieval
-    │                         │  (documents found)
-    │                         │
-    ▼                         │
-_scoped_context_index_lookup  │
-    │  Scope: domain=claims   │
-    │  Returns: 3 enrichment  │
-    │  assets                 │
-    │                         │
-    ▼                         │
-_record_asset_feedback        │
-    │  Type: genie_query_failed│
-    │                         │
-    └─────────────────────────┘
-                   │
-                   ▼
-           compose_answer
-                   │
-                   ▼
-    "This is a cross-domain question spanning agent
-     performance and claims data..."
+    ▼
+route_to_genie
+    │
+    │  Genie FAILS ✗
+    │
+    ▼
+_scoped_context_index_lookup
+    │  Scope: domain=claims, types=genie_space
+    │  Returns: enrichment assets
+    │
+    ▼
+_record_asset_feedback
+    │  Type: genie_query_failed
+    │
+    ▼
+compose_answer
+    │
+    ▼
+    "I wasn't able to retrieve the average claim
+     settlement time by region for Q4..."
 ```
 
 ### What the Governance Team Sees
@@ -844,12 +822,11 @@ After this interaction, the `ai_ops.asset_feedback` table contains a new row:
 
 | agent_name | domain | feedback_type | details | user_question |
 |------------|--------|---------------|---------|---------------|
-| genie | claims | genie_query_failed | Genie could not answer: Which agents have the highest churn rate... | Which agents have the highest churn rate compared to their claim settlement ratio? |
+| genie | claims | genie_query_failed | Genie could not answer: What is the average claim settlement time by region for Q4? | What is the average claim settlement time by region for Q4? |
 
 This signals to the data governance team that:
-- The Genie Space may need additional tables (e.g., joining agent performance with claims data)
-- A cross-domain metric view might be valuable to create
-- The Context Index may need a new asset specifically for agent-claims correlation analysis
+- The Genie Space may need additional tables or columns for settlement time metrics
+- A new dataset or view covering settlement time by region may need to be added to the Context Index
 
 ---
 

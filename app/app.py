@@ -430,21 +430,19 @@ def call_agent(question, history, thread_id=None):
         dashboard_urls = meta.get("dashboard_urls", [])
         domain = meta.get("domain", "unknown")
         clarification = meta.get("clarification")
-        resolved_tables = meta.get("resolved_tables", [])
-        resolved_genie = meta.get("resolved_genie_spaces", [])
+        genie_space = meta.get("genie_space")
+        doc_vs_index = meta.get("doc_vs_index")
         agent_details = meta.get("agent_details", {})
 
-        # Build rich trace with context about routing decisions
         trace = [{"step": "Classify Intent", "detail": f"{intent} ({confidence:.0%})", "ok": True}]
         if "clarify_or_disambiguate" in nodes:
             trace.append({"step": "Clarify", "detail": clarification or "Resolved", "ok": True})
 
-        # Show resolved domain and assets
         asset_detail = f"domain: {domain}"
-        if resolved_tables:
-            asset_detail += f" · tables: {', '.join(t.split('.')[-1] for t in resolved_tables[:3])}"
-        if resolved_genie:
-            asset_detail += f" · genie: {', '.join(g.split('.')[-1] if '.' in g else g for g in resolved_genie[:2])}"
+        if genie_space:
+            asset_detail += f" · genie: {genie_space[:12]}..."
+        if doc_vs_index:
+            asset_detail += f" · docs: {doc_vs_index.split('.')[-1]}"
         trace.append({"step": "Resolve Assets", "detail": asset_detail, "ok": True})
 
         # Show agent-specific details

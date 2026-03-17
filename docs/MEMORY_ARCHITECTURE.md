@@ -298,7 +298,7 @@ This document describes all memory systems used in the AIA Multi-Agent project. 
 | Agent | Capability | Priority | Supported Intents |
 |---|---|---|---|
 | `genie` | `text-to-sql` | 10 | `simple_kpi`, `complex_analysis` |
-| `multi_tool` | `sql+rag` | 20 | `document_lookup`, `multi_domain` |
+| `multi_tool` | `sql+rag` | 20 | `document_lookup` |
 | `analysis` | `statistical-analysis` | 30 | `anomaly_detection`, `complex_analysis` |
 | `visualization` | `dashboard-creation` | 40 | `visualization_request` |
 

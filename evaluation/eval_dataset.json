@@ -85,23 +85,23 @@
   },
   {
     "question": "How do claims patterns relate to agent performance across different product lines?",
-    "expected_intent": "multi_domain",
-    "expected_domain": "unknown",
-    "expected_agents": ["genie", "multi_tool", "analysis"],
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
     "expected_answer_contains": ["claims", "agent", "product"]
   },
   {
     "question": "Compare fraud rates across regions and correlate with policy types and distribution channels",
-    "expected_intent": "multi_domain",
-    "expected_domain": "unknown",
-    "expected_agents": ["genie", "multi_tool", "analysis"],
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
     "expected_answer_contains": ["fraud", "region", "policy", "distribution"]
   },
   {
     "question": "Give me a complete overview of our Hong Kong business including claims, policies, and agent stats",
-    "expected_intent": "multi_domain",
-    "expected_domain": "unknown",
-    "expected_agents": ["genie", "multi_tool", "analysis"],
+    "expected_intent": "simple_kpi",
+    "expected_domain": "claims",
+    "expected_agents": ["genie"],
     "expected_answer_contains": ["Hong Kong", "claims", "policies", "agent"]
   },
   {

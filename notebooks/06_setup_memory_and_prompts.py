@@ -153,7 +153,6 @@ Classify the following question into exactly ONE category and provide a confiden
 Categories:
 - "simple_kpi": Simple KPI/metric questions (counts, totals, averages, trends by region/product/time)
 - "document_lookup": Policy terms, coverage details, exclusions, procedures, document search
-- "multi_domain": Questions spanning multiple domains or requiring data fusion from different sources
 - "conversational": Greetings, introductions, personal statements, small talk, or non-analytical messages
 
 Question: {question}

@@ -44,7 +44,6 @@ CATALOG = "aia_multi_agent_catalog"
 MODEL_ENDPOINT = "databricks-meta-llama-3-3-70b-instruct"
 VS_INDEX = f"{CATALOG}.ai_ops.context_index_vs"
 VS_ENDPOINT = "aia_context_index_vs"
-DOC_VS_INDEX = f"{CATALOG}.bronze.policy_documents_vs"
 SQL_WAREHOUSE_ID = "4b9b953939869799"
 
 
@@ -359,7 +358,7 @@ Classify the following question into exactly ONE category and provide a confiden
 Categories:
 - "simple_kpi": Simple KPI/metric questions (counts, totals, averages, trends by region/product/time)
 - "document_lookup": Policy terms, coverage details, exclusions, procedures, document search
-- "multi_domain": Questions spanning multiple domains or requiring data fusion from different sources
+- "conversational": Greetings, introductions, personal statements, small talk, or non-analytical messages
 
 Question: {question}
 
@@ -398,7 +397,7 @@ If the question is ambiguous or missing key filters (like region, time period, p
         confidence = 0.5
         missing_filters = []
 
-    valid = ["simple_kpi", "document_lookup", "multi_domain"]
+    valid = ["simple_kpi", "document_lookup", "conversational"]
     if intent not in valid:
         intent = "simple_kpi"
 
@@ -461,7 +460,7 @@ Respond in JSON:
         refined_confidence = state["intent_confidence"]
         clarification = ""
 
-    valid = ["simple_kpi", "document_lookup", "multi_domain"]
+    valid = ["simple_kpi", "document_lookup", "conversational"]
     if refined_intent in valid:
         state["intent"] = refined_intent
         state["intent_confidence"] = refined_confidence
@@ -476,16 +475,13 @@ Respond in JSON:
 
 # --- Default assets fallback ---
 def _get_default_assets(intent="simple_kpi"):
-    tables_by_intent = {
-        "simple_kpi": [f"{CATALOG}.gold.claims_summary", f"{CATALOG}.gold.policy_performance"],
-        "document_lookup": [f"{CATALOG}.bronze.policy_documents"],
-        "multi_domain": [f"{CATALOG}.gold.claims_summary", f"{CATALOG}.gold.agent_performance", f"{CATALOG}.silver.customer_360"],
-    }
     return {
-        "domain": "claims", "genie_space": None, "metric_views": [],
-        "tables": tables_by_intent.get(intent, [f"{CATALOG}.gold.claims_summary"]),
+        "domain": "claims",
+        "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
         "document_indexes": [f"{CATALOG}.bronze.policy_documents"],
-        "all_assets": [], "endorsement_info": {},
+        "doc_vs_index": f"{CATALOG}.ai_ops.policy_docs_vs",
+        "all_assets": [],
+        "endorsement_info": {},
     }
 
 
@@ -499,7 +495,7 @@ def resolve_assets_with_context_index(state):
         w = WorkspaceClient()
         results = w.vector_search_indexes.query_index(
             index_name=VS_INDEX,
-            columns=["asset_type", "asset_id", "display_name", "text", "domain", "endorsement_level"],
+            columns=["asset_type", "asset_id", "display_name", "text", "domain", "endorsement_level", "metadata"],
             query_text=question, num_results=10,
         )
         assets = []
@@ -507,10 +503,10 @@ def resolve_assets_with_context_index(state):
             assets.append({
                 "asset_type": row[0], "asset_id": row[1], "display_name": row[2],
                 "text": row[3], "domain": row[4], "endorsement_level": row[5],
-                "score": float(row[6]) if len(row) > 6 else 0.0,
+                "metadata": row[6] if len(row) > 6 else "{}",
+                "score": float(row[7]) if len(row) > 7 else 0.0,
             })
 
-        # P1: Prefer endorsed assets — sort endorsed first, then by score
         assets.sort(key=lambda a: (
             0 if a.get("endorsement_level") == "endorsed" else 1,
             -a.get("score", 0)
@@ -522,17 +518,21 @@ def resolve_assets_with_context_index(state):
             domain_counts[d] = domain_counts.get(d, 0) + 1
         primary_domain = max(domain_counts, key=domain_counts.get) if domain_counts else "claims"
         genie_spaces = [a for a in assets if a["asset_type"] == "genie_space"]
-        metric_views = [a for a in assets if a["asset_type"] == "metric_view"]
-        tables = [a for a in assets if a["asset_type"] == "table"]
         doc_indexes = [a for a in assets if a["asset_type"] == "document_index"]
-        dashboards = [a for a in assets if a["asset_type"] == "dashboard"]
+
+        doc_vs_index = None
+        if doc_indexes:
+            try:
+                meta = json.loads(doc_indexes[0].get("metadata") or "{}")
+                doc_vs_index = meta.get("vs_index")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         state["resolved_assets"] = {
             "domain": primary_domain,
             "genie_space": genie_spaces[0]["asset_id"] if genie_spaces else None,
-            "metric_views": [m["asset_id"] for m in metric_views],
-            "tables": [t["asset_id"] for t in tables],
             "document_indexes": [d["asset_id"] for d in doc_indexes],
-            "dashboards": [d for d in dashboards],
+            "doc_vs_index": doc_vs_index,
             "all_assets": assets,
             "endorsement_info": {a["asset_id"]: a["endorsement_level"] for a in assets},
         }
@@ -553,7 +553,7 @@ def _scoped_context_index_lookup(query_text, domain, asset_types=None, num_resul
     Args:
         query_text: semantic search query (e.g. "product hierarchy table")
         domain: the domain resolved by the Supervisor (e.g. "claims")
-        asset_types: optional list to filter (e.g. ["table", "metric_view"])
+        asset_types: optional list to filter (e.g. ["genie_space", "document_index"])
         num_results: max results to return (default 5)
 
     Returns:
@@ -594,7 +594,7 @@ def _record_asset_feedback(agent_name, domain, feedback_type, details, state):
     Args:
         agent_name: which agent discovered the gap (e.g. "genie", "multi_tool")
         domain: the domain context
-        feedback_type: e.g. "missing_metric_view", "missing_table", "suggested_dashboard"
+        feedback_type: e.g. "genie_query_failed", "missing_document_index"
         details: freeform description of the gap
         state: the supervisor state (to attach user_id, question context)
     """
@@ -620,23 +620,11 @@ def route_to_genie(state):
     question = state["user_question"]
     w = WorkspaceClient()
 
-    # Read Genie Space ID from config table, with hardcoded fallback
-    space_id = None
-    try:
-        config_result = _run_sql(
-            f"SELECT config_value FROM {CATALOG}.ai_ops.agent_config WHERE config_key = 'bajaj_genie_space_id'"
-        )
-        space_id = config_result["rows"][0]["config_value"] if config_result["rows"] else None
-    except Exception as e:
-        state["warnings"].append(f"Config table read failed: {str(e)[:100]}")
-
-    # Fallback to known Genie Space ID
-    if not space_id:
-        space_id = "01f0d6ff25da1f229950bb97c1ec974c"
+    space_id = state.get("resolved_assets", {}).get("genie_space")
 
     if not space_id:
-        state["genie_results"] = {"error": "No Genie Space configured"}
-        state["warnings"].append("Genie Space not configured — check agent_config table")
+        state["genie_results"] = {"error": "No Genie Space resolved from Context Index"}
+        state["warnings"].append("Genie Space not found in resolved assets — check Context Index")
         return state
 
     try:
@@ -670,18 +658,16 @@ def route_to_genie(state):
         state["genie_results"] = {"error": str(e)[:200], "status": "failed"}
         state["warnings"].append(f"Genie Agent error: {str(e)[:100]}")
 
-    # Scoped CI lookup: if Genie failed or returned no SQL, look up additional
-    # metric views / semantic info in the same domain to enrich context
     genie_res = state.get("genie_results", {})
     domain = state.get("resolved_assets", {}).get("domain", "claims")
     if genie_res.get("status") != "success" or not genie_res.get("sql"):
         extra = _scoped_context_index_lookup(
-            question, domain, asset_types=["metric_view", "genie_space", "table"], num_results=3,
+            question, domain, asset_types=["genie_space"], num_results=3,
         )
         if extra:
             genie_res["ci_enrichment"] = [{"asset_id": a["asset_id"], "display_name": a["display_name"],
                                             "asset_type": a["asset_type"]} for a in extra]
-        # Feedback: record missing metric view so governance can improve the space
+        # Feedback: record failure so governance can improve the space
         if genie_res.get("status") != "success":
             _record_asset_feedback("genie", domain, "genie_query_failed",
                                    f"Genie could not answer: {question[:150]}", state)
@@ -689,18 +675,27 @@ def route_to_genie(state):
     return state
 
 
-# --- Node 5: Multi-Tool Agent (SQL + RAG) ---
+# --- Node 5: Multi-Tool Agent (RAG) ---
 @mlflow.trace(name="route_to_multi_tool", span_type=SpanType.TOOL)
 def route_to_multi_tool(state):
-    """Vector Search RAG over policy documents."""
+    """Vector Search RAG over policy documents using the VS index resolved from Context Index."""
     question = state["user_question"]
     results = {}
+
+    doc_vs_index = state.get("resolved_assets", {}).get("doc_vs_index")
+    if not doc_vs_index:
+        results["docs"] = []
+        results["error"] = "No document VS index resolved from Context Index"
+        results["status"] = "failed"
+        state["warnings"].append("Document VS index not found in resolved assets — check Context Index")
+        state["multi_tool_results"] = results
+        return state
 
     try:
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient()
         vs_results = w.vector_search_indexes.query_index(
-            index_name=DOC_VS_INDEX,
+            index_name=doc_vs_index,
             columns=["document_id", "title", "content", "document_type", "category"],
             query_text=question, num_results=5,
         )
@@ -800,37 +795,6 @@ Instructions:
     return state
 
 
-# --- Node: Run All Agents (for multi_domain intent) ---
-@mlflow.trace(name="run_all_agents", span_type=SpanType.CHAIN)
-def run_all_agents(state):
-    """For multi_domain questions, run Genie + Multi-Tool in parallel."""
-    import copy
-    from concurrent.futures import ThreadPoolExecutor
-
-    # --- Phase 1: Genie + Multi-Tool in PARALLEL ---
-    genie_state = copy.deepcopy(state)
-    multi_tool_state = copy.deepcopy(state)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        genie_future = executor.submit(route_to_genie, genie_state)
-        multi_tool_future = executor.submit(route_to_multi_tool, multi_tool_state)
-
-        genie_result = genie_future.result()
-        multi_tool_result = multi_tool_future.result()
-
-    # Merge Phase 1 results back into state
-    state["genie_results"] = genie_result.get("genie_results")
-    state["multi_tool_results"] = multi_tool_result.get("multi_tool_results")
-    for w in genie_result.get("warnings", []):
-        if w not in state["warnings"]:
-            state["warnings"].append(w)
-    for w in multi_tool_result.get("warnings", []):
-        if w not in state["warnings"]:
-            state["warnings"].append(w)
-
-    return state
-
-
 # --- Routing Logic ---
 def should_clarify(state):
     """Route to clarification if confidence is low."""
@@ -840,15 +804,13 @@ def should_clarify(state):
 
 
 def route_by_intent(state):
-    """Route to the appropriate agent(s) based on intent, resolved assets, and tool registry (P2)."""
+    """Route to the appropriate agent based on intent, resolved assets, and tool registry (P2)."""
     intent = state.get("intent", "simple_kpi")
     assets = state.get("resolved_assets", {})
     has_genie = bool(assets.get("genie_space"))
 
-    # P2: Check tool registry for capability-based routing
     capabilities = _load_agent_capabilities()
     if capabilities:
-        # Find best matching agent from registry
         matching_agents = []
         for cap in capabilities:
             cap_intents = cap.get("supported_intents", "[]")
@@ -862,14 +824,12 @@ def route_by_intent(state):
         if matching_agents:
             matching_agents.sort(key=lambda x: x[1])
             best_agent = matching_agents[0][0]
-            # Map registry agent names to graph node names
             agent_map = {"genie": "genie", "multi_tool": "multi_tool"}
-            if best_agent in agent_map and intent != "multi_domain":
+            if best_agent in agent_map:
                 return agent_map[best_agent]
 
-    # Fallback to hardcoded routing
-    if intent == "multi_domain":
-        return "all_agents"
+    if intent == "conversational":
+        return "compose_answer"
     elif intent == "document_lookup":
         return "multi_tool"
     elif intent == "simple_kpi":
@@ -880,39 +840,30 @@ def route_by_intent(state):
 # --- Build LangGraph ---
 workflow = StateGraph(AgentState)
 
-# Add nodes
 workflow.add_node("classify_intent", classify_intent)
 workflow.add_node("clarify_or_disambiguate", clarify_or_disambiguate)
 workflow.add_node("resolve_assets", resolve_assets_with_context_index)
 workflow.add_node("genie", route_to_genie)
 workflow.add_node("multi_tool", route_to_multi_tool)
-workflow.add_node("all_agents", run_all_agents)
 workflow.add_node("compose_answer", compose_answer)
 
-# Edges: START -> classify_intent
 workflow.add_edge(START, "classify_intent")
 
-# classify_intent -> clarify (if low confidence) or resolve_assets
 workflow.add_conditional_edges(
     "classify_intent", should_clarify,
     {"clarify": "clarify_or_disambiguate", "resolve": "resolve_assets"},
 )
 
-# clarify -> resolve_assets (always continues)
 workflow.add_edge("clarify_or_disambiguate", "resolve_assets")
 
-# resolve_assets -> route to appropriate agent(s)
 workflow.add_conditional_edges(
     "resolve_assets", route_by_intent,
-    {"genie": "genie", "multi_tool": "multi_tool", "all_agents": "all_agents"},
+    {"genie": "genie", "multi_tool": "multi_tool", "compose_answer": "compose_answer"},
 )
 
-# Worker agents -> compose_answer
 workflow.add_edge("genie", "compose_answer")
 workflow.add_edge("multi_tool", "compose_answer")
-workflow.add_edge("all_agents", "compose_answer")
 
-# compose_answer -> END
 workflow.add_edge("compose_answer", END)
 
 graph = workflow.compile()
@@ -1033,27 +984,28 @@ class SupervisorResponsesAgent(ResponsesAgent):
         # Build custom_outputs (P0)
         resolved = result.get("resolved_assets", {})
         domain = resolved.get("domain", "unknown") if resolved else "unknown"
-        resolved_tables = [t if isinstance(t, str) else t.get("display_name", t.get("asset_id", "")) for t in resolved.get("tables", [])] if resolved else []
-        resolved_genie = [g if isinstance(g, str) else g.get("display_name", g.get("asset_id", "")) for g in resolved.get("genie_spaces", [])] if resolved else []
 
-        # Agent-level summaries for thinking display
         agent_details = {}
         if result.get("genie_results"):
             gr = result["genie_results"]
             agent_details["genie"] = {
                 "status": gr.get("status", "unknown"),
+                "space_id": gr.get("space_id"),
                 "sql": gr.get("sql", "")[:120] if gr.get("sql") else None,
                 "row_count": gr.get("row_count"),
             }
         if result.get("multi_tool_results"):
             mt = result["multi_tool_results"]
-            agent_details["multi_tool"] = {"docs_found": len(mt.get("docs", [])) if mt.get("docs") else 0}
+            agent_details["multi_tool"] = {
+                "docs_found": len(mt.get("docs", [])) if mt.get("docs") else 0,
+                "doc_vs_index": resolved.get("doc_vs_index") if resolved else None,
+            }
         custom_outputs = {
             "intent": result.get("intent", "unknown"),
             "intent_confidence": result.get("intent_confidence", 0.0),
             "domain": domain,
-            "resolved_tables": resolved_tables[:5],
-            "resolved_genie_spaces": resolved_genie[:3],
+            "genie_space": resolved.get("genie_space") if resolved else None,
+            "doc_vs_index": resolved.get("doc_vs_index") if resolved else None,
             "warnings": result.get("warnings", []),
             "clarification": result.get("clarification_message"),
             "nodes_executed": nodes_executed,

@@ -93,7 +93,7 @@ USING (
     'multi_tool' AS agent_name,
     'sql+rag' AS capability_name,
     'Executes SQL queries over Unity Catalog tables and performs Vector Search RAG over document indexes. Handles questions that need both structured data and unstructured document context.' AS description,
-    ARRAY('document_lookup', 'multi_domain') AS supported_intents,
+    ARRAY('document_lookup') AS supported_intents,
     ARRAY('claims', 'policies', 'products', 'distribution') AS supported_domains,
     '{"type":"object","properties":{"question":{"type":"string"},"sql_query":{"type":"string"},"search_query":{"type":"string"}}}' AS input_schema,
     '{"type":"object","properties":{"sql_result":{"type":"array"},"rag_result":{"type":"string"},"sources":{"type":"array"}}}' AS output_schema,
