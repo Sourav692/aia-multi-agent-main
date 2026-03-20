@@ -52,7 +52,7 @@ Without the Context Index, the system would need hardcoded rules mapping questio
 │  │  Delta Table         │       │  Vector Search Index          │   │
 │  │  ai_ops.context_index│──────▶│  ai_ops.context_index_vs     │   │
 │  │                      │ Delta │                               │   │
-│  │  16 asset rows       │ Sync  │  Embedding model:             │   │
+│  │  19 asset rows       │ Sync  │  Embedding model:             │   │
 │  │  (manually curated)  │       │  databricks-bge-large-en      │   │
 │  └─────────────────────┘       └──────────────┬───────────────┘   │
 │                                                │                   │
@@ -104,26 +104,29 @@ Good descriptions should:
 - Describe when to use it ("Use for claims volume analysis and trend monitoring")
 - Include domain-specific vocabulary users would naturally use
 
-### Currently Indexed Assets (16 total)
+### Currently Indexed Assets (19 total)
 
 | # | Asset Type | Display Name | Domain | Endorsement |
 |---|-----------|--------------|--------|-------------|
-| 1 | `genie_space` | Bajaj Demo Genie Space | claims | endorsed |
-| 2 | `metric_view` | Claims Count Metric View | claims | endorsed |
-| 3 | `metric_view` | Claims Amount Metric View | claims | endorsed |
-| 4 | `metric_view` | Fraud Summary Metric View | claims | endorsed |
-| 5 | `metric_view` | Policy Premium Metric View | policies | endorsed |
-| 6 | `metric_view` | Policy Mix Metric View | policies | endorsed |
-| 7 | `metric_view` | Agent Productivity Metric View | distribution | endorsed |
-| 8 | `metric_view` | Customer Segments Metric View | customers | endorsed |
-| 9 | `table` | Claims Summary Table | claims | endorsed |
-| 10 | `table` | Policy Performance Table | policies | endorsed |
-| 11 | `table` | Agent Performance Table | distribution | endorsed |
-| 12 | `table` | Fraud Analysis Table | claims | endorsed |
-| 13 | `table` | Enriched Claims Table | claims | endorsed |
-| 14 | `table` | Enriched Policies Table | policies | endorsed |
-| 15 | `table` | Customer 360 Table | customers | endorsed |
-| 16 | `document_index` | Policy Documents Index | documents | endorsed |
+| 1 | `genie_space` | Claims Analytics Space | claims | endorsed |
+| 2 | `genie_space` | Policy & Underwriting Space | policies | endorsed |
+| 3 | `genie_space` | Distribution & Channels Space | distribution | endorsed |
+| 4 | `genie_space` | Customer Analytics Space | customers | endorsed |
+| 5 | `metric_view` | Claims Count Metric View | claims | endorsed |
+| 6 | `metric_view` | Claims Amount Metric View | claims | endorsed |
+| 7 | `metric_view` | Fraud Summary Metric View | claims | endorsed |
+| 8 | `metric_view` | Policy Premium Metric View | policies | endorsed |
+| 9 | `metric_view` | Policy Mix Metric View | policies | endorsed |
+| 10 | `metric_view` | Agent Productivity Metric View | distribution | endorsed |
+| 11 | `metric_view` | Customer Segments Metric View | customers | endorsed |
+| 12 | `table` | Claims Summary Table | claims | endorsed |
+| 13 | `table` | Policy Performance Table | policies | endorsed |
+| 14 | `table` | Agent Performance Table | distribution | endorsed |
+| 15 | `table` | Fraud Analysis Table | claims | endorsed |
+| 16 | `table` | Enriched Claims Table | claims | endorsed |
+| 17 | `table` | Enriched Policies Table | policies | endorsed |
+| 18 | `table` | Customer 360 Table | customers | endorsed |
+| 19 | `document_index` | Policy Documents Index | documents | endorsed |
 
 ---
 
@@ -273,7 +276,13 @@ The resolved assets are written to the shared state, which downstream nodes (rou
 ```python
 state["resolved_assets"] = {
     "domain": "claims",
-    "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
+    "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",  # best match (backward compat)
+    "genie_spaces": [                                      # ranked list for multi-space routing
+        {"space_id": "01f0d6ff...", "domain": "claims",
+         "display_name": "Claims Analytics Space", "score": 0.87, "endorsement": "endorsed"},
+        {"space_id": "abc123...", "domain": "policies",
+         "display_name": "Policy & Underwriting Space", "score": 0.62, "endorsement": "endorsed"},
+    ],
     "metric_views": ["gold.mv_claims_count", "gold.mv_claims_amount"],
     "tables": ["gold.claims_summary", "silver.enriched_claims"],
     "document_indexes": ["bronze.policy_documents"],
@@ -282,6 +291,8 @@ state["resolved_assets"] = {
     "endorsement_info": {"gold.mv_claims_count": "endorsed", ...},
 }
 ```
+
+The `genie_spaces` list is ordered by endorsement level (endorsed first) and semantic score. The Genie agent tries each space in order until one succeeds.
 
 ### Fallback Behavior
 
@@ -312,7 +323,8 @@ The Context Index is accessed through two distinct patterns:
 **Characteristics:**
 - Returns top 10 results
 - Results determine the primary domain for the entire interaction
-- The resolved `genie_space` ID is used by `route_by_intent()` to decide whether to route to the Genie Agent
+- All matching `genie_space` assets are returned as a ranked list in `resolved_assets.genie_spaces`, enabling the Genie agent to try multiple spaces in priority order
+- The first `genie_space` ID is also stored in `resolved_assets.genie_space` for backward compatibility with `route_by_intent()`
 - The presence/absence of `document_indexes` influences routing to the Multi-Tool Agent
 
 ### Pattern 2: Worker Scoped Lookup (Domain-Restricted)
@@ -473,14 +485,14 @@ The question `"What is the total number of claims by region?"` is sent to the Ve
 | Rank | Asset Type | Display Name | Domain | Score | Endorsement |
 |------|-----------|--------------|--------|-------|-------------|
 | 1 | `metric_view` | Claims Count Metric View | claims | 0.87 | endorsed |
-| 2 | `genie_space` | Bajaj Demo Genie Space | claims | 0.82 | endorsed |
+| 2 | `genie_space` | Claims Analytics Space | claims | 0.82 | endorsed |
 | 3 | `table` | Claims Summary Table | claims | 0.79 | endorsed |
 | 4 | `metric_view` | Claims Amount Metric View | claims | 0.71 | endorsed |
 | 5 | `table` | Enriched Claims Table | claims | 0.65 | endorsed |
 
 **Why these results?**
 - The query mentions "claims" and "count by region" — the **Claims Count Metric View** matches closely because its `text` says: *"Total count of insurance claims by month, region, product category..."*
-- The **Genie Space** description mentions *"claims, policies, customers, and business performance metrics"* — a broad match
+- The **Claims Analytics Space** description mentions *"claim counts, claim amounts, claim processing times, approval rates..."* — a strong domain match
 - The **Claims Summary Table** is *"Monthly aggregated claims metrics by region..."* — strong match on "claims" and "region"
 
 #### 3. Resolved Assets
@@ -696,7 +708,7 @@ The question is sent to the Vector Search index.
 
 | Rank | Asset Type | Display Name | Domain | Score | Endorsement |
 |------|-----------|--------------|--------|-------|-------------|
-| 1 | `genie_space` | Bajaj Demo Genie Space | claims | 0.82 | endorsed |
+| 1 | `genie_space` | Claims Analytics Space | claims | 0.82 | endorsed |
 | 2 | `document_index` | Policy Documents Index | claims | 0.65 | endorsed |
 
 **Why these results?**
@@ -752,7 +764,7 @@ This scoped lookup:
 The enrichment results are attached to the Genie results:
 ```python
 genie_res["ci_enrichment"] = [
-    {"asset_id": "01f0d6ff25da1f229950bb97c1ec974c", "display_name": "Bajaj Demo Genie Space", "asset_type": "genie_space"},
+    {"asset_id": "01f0d6ff25da1f229950bb97c1ec974c", "display_name": "Claims Analytics Space", "asset_type": "genie_space"},
 ]
 ```
 

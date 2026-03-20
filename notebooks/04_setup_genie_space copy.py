@@ -12,8 +12,8 @@
 # MAGIC - Customer Analytics (customer segments, retention, demographics)
 # MAGIC
 # MAGIC **Note:** Genie Spaces can be created via the UI or API. This notebook
-# MAGIC provides the configuration for setup. Space IDs are registered in the
-# MAGIC Context Index (notebook 03) for semantic routing at runtime.
+# MAGIC provides the configuration for setup. Each space ID is stored in
+# MAGIC `ai_ops.agent_config` and registered in the Context Index (notebook 03).
 
 # COMMAND ----------
 
@@ -111,10 +111,59 @@ GENIE_SPACE_CONFIGS = [
 
 # COMMAND ----------
 
+# DBTITLE 1,Helper: create Genie space via REST API
+import requests
+import json
+import uuid
+
 from databricks.sdk import WorkspaceClient
 
 w = WorkspaceClient()
+host = w.config.host.rstrip("/")
+_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+headers = {"Authorization": f"Bearer {_token}"}
 
+# Use shared SQL warehouse (per workspace policy)
+WAREHOUSE_ID = "862f1d757f0424f7"  # dbdemos-shared-endpoint
+
+def create_genie_space(title: str, description: str, tables: list[str],
+                       sample_questions: list[str] | None = None,
+                       parent_path: str | None = None,
+                       warehouse_id: str = WAREHOUSE_ID) -> str | None:
+    """Create a Genie space via the REST API. Returns the space_id or None on failure."""
+    sq = []
+    for q in (sample_questions or []):
+        sq.append({"id": uuid.uuid4().hex, "question": [q]})
+
+    table_entries = [{"identifier": t} for t in tables]
+
+    serialized = json.dumps({
+        "version": 1,
+        "config": {"sample_questions": sq} if sq else {},
+        "data_sources": {"tables": table_entries},
+        "instructions": {},
+    })
+
+    body = {
+        "title": title,
+        "description": description,
+        "serialized_space": serialized,
+        "warehouse_id": warehouse_id,
+    }
+    if parent_path:
+        body["parent_path"] = parent_path
+
+    resp = requests.post(f"{host}/api/2.0/genie/spaces", headers=headers, json=body)
+    if resp.status_code == 200:
+        return resp.json().get("space_id") or resp.json().get("id")
+    else:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+
+print(f"Helper function ready (warehouse: {WAREHOUSE_ID}).")
+
+# COMMAND ----------
+
+# DBTITLE 1,Create all Genie spaces
 created_spaces = {}
 
 for config in GENIE_SPACE_CONFIGS:
@@ -122,19 +171,59 @@ for config in GENIE_SPACE_CONFIGS:
     title = config["title"]
     tables = config["tables"]
     description = config["description"]
+    sample_questions = config.get("sample_questions", [])
 
     try:
-        space = w.genie.create_space(
+        space_id = create_genie_space(
             title=title,
             description=description,
-            table_identifiers=tables,
+            tables=tables,
+            sample_questions=sample_questions,
         )
-        created_spaces[key] = space.space_id
-        print(f"[OK] Created '{title}': {space.space_id}")
+        created_spaces[key] = space_id
+        print(f"[OK] Created '{title}': {space_id}")
     except Exception as e:
-        print(f"[WARN] '{title}' creation via SDK: {e}")
+        print(f"[WARN] '{title}' creation failed: {e}")
         print(f"       Please create manually via UI with tables: {', '.join(tables)}")
         created_spaces[key] = None
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Store Genie Space IDs for Agent Use
+
+# COMMAND ----------
+
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {catalog}.ai_ops.agent_config (
+    config_key STRING,
+    config_value STRING,
+    updated_at TIMESTAMP
+)
+""")
+
+for key, space_id in created_spaces.items():
+    if space_id:
+        spark.sql(f"""
+        MERGE INTO {catalog}.ai_ops.agent_config t
+        USING (SELECT '{key}' AS config_key, '{space_id}' AS config_value, current_timestamp() AS updated_at) s
+        ON t.config_key = s.config_key
+        WHEN MATCHED THEN UPDATE SET t.config_value = s.config_value, t.updated_at = s.updated_at
+        WHEN NOT MATCHED THEN INSERT *
+        """)
+        print(f"Stored {key} = {space_id}")
+
+# Backward-compatible alias for the original claims space
+claims_id = created_spaces.get("genie_space_claims")
+if claims_id:
+    spark.sql(f"""
+    MERGE INTO {catalog}.ai_ops.agent_config t
+    USING (SELECT 'bajaj_genie_space_id' AS config_key, '{claims_id}' AS config_value, current_timestamp() AS updated_at) s
+    ON t.config_key = s.config_key
+    WHEN MATCHED THEN UPDATE SET t.config_value = s.config_value, t.updated_at = s.updated_at
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print(f"Stored bajaj_genie_space_id (backward compat) = {claims_id}")
 
 # COMMAND ----------
 

@@ -178,7 +178,31 @@ Instructions:
         {
             "agent_id": "genie",
             "scope": "default",
-            "base_prompt": "Query the Genie Space for structured BI answers using Text-to-SQL over metric views and curated tables.",
+            "base_prompt": "Query the Genie Space for structured BI answers using Text-to-SQL over metric views and curated tables. Multiple domain-specific spaces may be tried in priority order.",
+            "overlay_prompt": None,
+        },
+        {
+            "agent_id": "genie",
+            "scope": "claims",
+            "base_prompt": "Focus on claims KPIs: claim counts, claim amounts, processing times, approval rates, fraud analysis, loss ratios, and suspicious claims by region, product, and time period.",
+            "overlay_prompt": None,
+        },
+        {
+            "agent_id": "genie",
+            "scope": "policies",
+            "base_prompt": "Focus on policy and underwriting KPIs: premium volumes, policy counts, renewal rates, lapse rates, product mix, new business issuance, and underwriting performance.",
+            "overlay_prompt": None,
+        },
+        {
+            "agent_id": "genie",
+            "scope": "distribution",
+            "base_prompt": "Focus on distribution KPIs: agent productivity, sales pipeline, channel contributions, commission analysis, partner network performance, and agent rankings.",
+            "overlay_prompt": None,
+        },
+        {
+            "agent_id": "genie",
+            "scope": "customers",
+            "base_prompt": "Focus on customer KPIs: customer segmentation, retention rates, claim frequency by segment, customer lifetime value, and demographic analysis.",
             "overlay_prompt": None,
         },
         {

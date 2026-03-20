@@ -475,9 +475,15 @@ Respond in JSON:
 
 # --- Default assets fallback ---
 def _get_default_assets(intent="simple_kpi"):
+    default_space_id = "01f12199fed5107a9d2ccac293b2c0b6"
     return {
         "domain": "claims",
-        "genie_space": "01f0d6ff25da1f229950bb97c1ec974c",
+        "genie_space": default_space_id,
+        "genie_spaces": [
+            {"space_id": default_space_id, "domain": "claims",
+             "display_name": "Claims Analytics Space", "score": 1.0,
+             "endorsement": "endorsed"},
+        ],
         "document_indexes": [f"{CATALOG}.bronze.policy_documents"],
         "doc_vs_index": f"{CATALOG}.ai_ops.policy_docs_vs",
         "all_assets": [],
@@ -531,6 +537,12 @@ def resolve_assets_with_context_index(state):
         state["resolved_assets"] = {
             "domain": primary_domain,
             "genie_space": genie_spaces[0]["asset_id"] if genie_spaces else None,
+            "genie_spaces": [
+                {"space_id": g["asset_id"], "domain": g["domain"],
+                 "display_name": g["display_name"], "score": g.get("score", 0),
+                 "endorsement": g.get("endorsement_level", "standard")}
+                for g in genie_spaces
+            ],
             "document_indexes": [d["asset_id"] for d in doc_indexes],
             "doc_vs_index": doc_vs_index,
             "all_assets": assets,
@@ -613,20 +625,9 @@ def _record_asset_feedback(agent_name, domain, feedback_type, details, state):
         pass
 
 
-# --- Node 4: Genie Agent ---
-@mlflow.trace(name="route_to_genie", span_type=SpanType.TOOL)
-def route_to_genie(state):
-    from databricks.sdk import WorkspaceClient
-    question = state["user_question"]
-    w = WorkspaceClient()
-
-    space_id = state.get("resolved_assets", {}).get("genie_space")
-
-    if not space_id:
-        state["genie_results"] = {"error": "No Genie Space resolved from Context Index"}
-        state["warnings"].append("Genie Space not found in resolved assets — check Context Index")
-        return state
-
+# --- Genie API helper (reusable per-space call) ---
+def _query_genie_space(w, space_id, question):
+    """Call the Genie API for a single space and return a result dict."""
     try:
         conversation = w.genie.start_conversation(space_id=space_id, content=question)
         for _ in range(30):
@@ -647,30 +648,74 @@ def route_to_genie(state):
                         sql_query = att.query.query
                     if att.text and att.text.content:
                         result_data = att.text.content
-            state["genie_results"] = {
-                "space_id": space_id, "sql": sql_query,
-                "result_summary": result_data or "No result text", "status": "success",
+            return {
+                "sql": sql_query,
+                "result_summary": result_data or "No result text",
+                "status": "success",
             }
         else:
-            state["genie_results"] = {"error": f"Genie status: {msg.status}", "status": "failed"}
-            state["warnings"].append("Genie query did not complete")
+            return {"error": f"Genie status: {msg.status}", "status": "failed"}
     except Exception as e:
-        state["genie_results"] = {"error": str(e)[:200], "status": "failed"}
-        state["warnings"].append(f"Genie Agent error: {str(e)[:100]}")
+        return {"error": str(e)[:200], "status": "failed"}
 
-    genie_res = state.get("genie_results", {})
+
+# --- Node 4: Genie Agent (Multi-Space) ---
+@mlflow.trace(name="route_to_genie", span_type=SpanType.TOOL)
+def route_to_genie(state):
+    from databricks.sdk import WorkspaceClient
+    question = state["user_question"]
+    w = WorkspaceClient()
+
+    genie_spaces = state.get("resolved_assets", {}).get("genie_spaces", [])
+    if not genie_spaces:
+        single = state.get("resolved_assets", {}).get("genie_space")
+        if single:
+            genie_spaces = [{"space_id": single, "domain": "unknown",
+                             "display_name": "Default"}]
+
+    if not genie_spaces:
+        state["genie_results"] = {"error": "No Genie Spaces resolved from Context Index",
+                                  "status": "failed"}
+        state["warnings"].append("Genie Space not found in resolved assets — check Context Index")
+        return state
+
+    attempts = []
+    for space_info in genie_spaces:
+        space_id = space_info["space_id"]
+        result = _query_genie_space(w, space_id, question)
+        attempt = {
+            **result,
+            "space_id": space_id,
+            "domain": space_info.get("domain"),
+            "display_name": space_info.get("display_name"),
+        }
+        attempts.append(attempt)
+        if result["status"] == "success" and result.get("sql"):
+            break
+
+    best = next((a for a in attempts if a["status"] == "success" and a.get("sql")), None)
+    if best is None:
+        best = next((a for a in attempts if a["status"] == "success"), attempts[-1])
+
+    state["genie_results"] = {**best, "attempts": attempts}
+
+    if best.get("status") != "success":
+        state["warnings"].append("Genie query did not complete on any resolved space")
+
     domain = state.get("resolved_assets", {}).get("domain", "claims")
-    if genie_res.get("status") != "success" or not genie_res.get("sql"):
+    if best.get("status") != "success" or not best.get("sql"):
         extra = _scoped_context_index_lookup(
             question, domain, asset_types=["genie_space"], num_results=3,
         )
         if extra:
-            genie_res["ci_enrichment"] = [{"asset_id": a["asset_id"], "display_name": a["display_name"],
-                                            "asset_type": a["asset_type"]} for a in extra]
-        # Feedback: record failure so governance can improve the space
-        if genie_res.get("status") != "success":
+            state["genie_results"]["ci_enrichment"] = [
+                {"asset_id": a["asset_id"], "display_name": a["display_name"],
+                 "asset_type": a["asset_type"]} for a in extra
+            ]
+        if best.get("status") != "success":
+            failed_spaces = ", ".join(a.get("display_name", a["space_id"]) for a in attempts)
             _record_asset_feedback("genie", domain, "genie_query_failed",
-                                   f"Genie could not answer: {question[:150]}", state)
+                                   f"Genie could not answer on [{failed_spaces}]: {question[:150]}", state)
 
     return state
 
@@ -726,9 +771,10 @@ def compose_answer(state):
 
     context_parts = []
 
-    # Genie results
+    # Genie results (includes which space answered)
     if genie and genie.get("status") == "success":
-        context_parts.append(f"**Genie Agent:** SQL: {genie.get('sql', 'N/A')}\nResult: {genie.get('result_summary', 'N/A')}")
+        space_name = genie.get("display_name", "Genie Agent")
+        context_parts.append(f"**{space_name}:** SQL: {genie.get('sql', 'N/A')}\nResult: {genie.get('result_summary', 'N/A')}")
 
     # Multi-tool RAG results
     if multi_tool and multi_tool.get("docs"):
@@ -991,8 +1037,10 @@ class SupervisorResponsesAgent(ResponsesAgent):
             agent_details["genie"] = {
                 "status": gr.get("status", "unknown"),
                 "space_id": gr.get("space_id"),
+                "display_name": gr.get("display_name"),
                 "sql": gr.get("sql", "")[:120] if gr.get("sql") else None,
                 "row_count": gr.get("row_count"),
+                "spaces_tried": len(gr.get("attempts", [])),
             }
         if result.get("multi_tool_results"):
             mt = result["multi_tool_results"]

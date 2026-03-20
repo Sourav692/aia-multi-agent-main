@@ -66,18 +66,18 @@ COMMENT 'Agent capability registry: enables semantic tool discovery and intent-b
 -- 4. Seed data for agent_capabilities (idempotent via MERGE)
 -- ---------------------------------------------------------------------------
 
--- Genie Agent: text-to-sql
+-- Genie Agent: text-to-sql (multi-space — Context Index selects the best space)
 MERGE INTO aia_multi_agent_catalog.ai_ops.agent_capabilities AS target
 USING (
   SELECT
     'cap-genie-text2sql' AS capability_id,
     'genie' AS agent_name,
     'text-to-sql' AS capability_name,
-    'Translates natural-language questions into SQL via Databricks Genie Space. Best for straightforward KPI queries over curated metric views and endorsed tables.' AS description,
+    'Translates natural-language questions into SQL via Databricks Genie Spaces. Multiple domain-specific spaces (claims, policies, distribution, customers) are registered in the Context Index. The Supervisor resolves a ranked list of matching spaces and the Genie agent tries them in priority order.' AS description,
     ARRAY('simple_kpi', 'complex_analysis') AS supported_intents,
-    ARRAY('claims', 'policies', 'products', 'distribution') AS supported_domains,
-    '{"type":"object","properties":{"question":{"type":"string"},"genie_space_id":{"type":"string"}}}' AS input_schema,
-    '{"type":"object","properties":{"sql":{"type":"string"},"result":{"type":"array"},"description":{"type":"string"}}}' AS output_schema,
+    ARRAY('claims', 'policies', 'products', 'distribution', 'customers') AS supported_domains,
+    '{"type":"object","properties":{"question":{"type":"string"},"genie_spaces":{"type":"array","items":{"type":"object","properties":{"space_id":{"type":"string"},"domain":{"type":"string"}}}}}}' AS input_schema,
+    '{"type":"object","properties":{"sql":{"type":"string"},"result":{"type":"array"},"description":{"type":"string"},"space_id":{"type":"string"},"display_name":{"type":"string"},"attempts":{"type":"array"}}}' AS output_schema,
     true AS is_active,
     10 AS priority
 ) AS source
