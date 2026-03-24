@@ -616,7 +616,7 @@ If the question is ambiguous or missing key filters (like region, time period, p
 
     state["intent"] = intent
     state["intent_confidence"] = confidence
-    state["needs_clarification"] = confidence < 0.6 or len(missing_filters) > 0
+    state["needs_clarification"] = confidence < 0.6 or (len(missing_filters) > 0 and confidence < 0.8)
     state["warnings"] = state.get("warnings", [])
 
     if missing_filters:
@@ -697,7 +697,7 @@ Respond in JSON:
 
 # COMMAND ----------
 def _get_default_assets(intent="simple_kpi"):
-    default_space_id = "01f12199fed5107a9d2ccac293b2c0b6"
+    default_space_id = "01f1272d4ba6144ba75d868762f1925d"
     return {
         "domain": "claims",
         "genie_space": default_space_id,
