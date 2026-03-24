@@ -1,28 +1,34 @@
-"""
-AIA Supervisor Agent — Standalone code file for MLflow code-based logging.
-This file is loaded by mlflow.pyfunc.log_model(python_model="agent_code.py").
+# COMMAND ---------- [markdown]
+# # AIA Supervisor Agent — Interactive Notebook
+# 
+# This notebook is the interactive version of `agent_code.py`. It implements the full Supervisor Agent with:
+# 
+# **6 LangGraph Nodes:**
+# 1. `classify_intent` — Interprets user question intent
+# 2. `clarify_or_disambiguate` — Handles ambiguous queries (optional)
+# 3. `resolve_assets_with_context_index` — Discovers data assets via Vector Search
+# 4. `route_to_genie` — Text-to-SQL via Genie Space
+# 5. `route_to_multi_tool` — Vector Search RAG over policy documents
+# 6. `compose_answer` — Synthesizes final response
+# 
+# **Enhancements:**
+# - P0: Short-term memory (Delta checkpoints), MLflow Tracing, custom I/O
+# - P1: Prompt management, endorsed asset routing
+# - P2: Long-term user memory, episodic memory, tool registry
 
-Implements 6 nodes:
-1. classify_intent
-2. clarify_or_disambiguate (optional, when confidence is low)
-3. resolve_assets_with_context_index
-4. route_to_genie
-5. route_to_multi_tool (Vector Search RAG only)
-6. compose_answer
+# COMMAND ---------- [markdown]
+# ## Install Dependencies
 
-P0/P1 enhancements:
-- Short-term memory via Delta checkpoint table (ai_ops.conversations)
-- Explicit MLflow Tracing spans on every node
-- custom_inputs (thread_id, user_id, domain) / custom_outputs
-- Prompt management from ai_ops.agent_instructions table
-- Endorsed asset routing preference
+# COMMAND ----------
+# !pip install "mlflow>=3.1" "databricks-agents>=1.0.0" "pydantic>=2" "langgraph>=0.2" langchain-core databricks-langchain databricks-vectorsearch databricks-sdk databricks-ai-bridge rich --upgrade
 
-P2 enhancements:
-- Long-term user memory (ai_ops.user_memory) for personalized responses
-- Episodic memory (ai_ops.episodic_memory) for continuous learning
-- Tool registry (ai_ops.agent_capabilities) for semantic agent routing
-"""
+# COMMAND ----------
+# dbutils.library.restartPython()  # Uncomment on Databricks
 
+# COMMAND ---------- [markdown]
+# ## Imports & Configuration
+
+# COMMAND ----------
 import mlflow
 import json
 import time
@@ -36,18 +42,201 @@ from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
 from mlflow.entities.span import SpanType
 from mlflow.models import set_model
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich import box
 
 mlflow.langchain.autolog()
 
-# --- Configuration ---
+# COMMAND ----------
 CATALOG = "aia_multi_agent_catalog"
-MODEL_ENDPOINT = "databricks-meta-llama-3-3-70b-instruct"
+MODEL_ENDPOINT = "databricks-claude-opus-4-6"
 VS_INDEX = f"{CATALOG}.ai_ops.context_index_vs"
 VS_ENDPOINT = "aia_context_index_vs"
 SQL_WAREHOUSE_ID = "4b9b953939869799"
 
+print(f"Catalog: {CATALOG}")
+print(f"LLM Endpoint: {MODEL_ENDPOINT}")
+print(f"VS Index: {VS_INDEX}")
 
-# --- SQL Helper (works in Model Serving, no Spark needed) ---
+# COMMAND ----------
+console = Console()
+_flow_step = 0
+
+NODE_STYLES = {
+    "classify_intent": ("bold cyan", "Classify Intent"),
+    "clarify_or_disambiguate": ("bold yellow", "Clarify / Disambiguate"),
+    "resolve_assets": ("bold green", "Resolve Assets (Context Index)"),
+    "genie": ("bold blue", "Genie Agent (Text-to-SQL)"),
+    "multi_tool": ("bold magenta", "Multi-Tool Agent (RAG)"),
+    "compose_answer": ("bold white", "Compose Final Answer"),
+}
+
+
+def _reset_steps():
+    global _flow_step
+    _flow_step = 0
+
+
+def _next_step():
+    global _flow_step
+    _flow_step += 1
+    return _flow_step
+
+
+def log_flow_start(question, thread_id=None, user_id=None):
+    _reset_steps()
+    parts = Text()
+    parts.append("AIA Supervisor Agent — Flow Started\n\n", style="bold bright_green")
+    parts.append("Question: ", style="dim")
+    parts.append(f"{question[:150]}\n", style="bright_white")
+    if thread_id:
+        parts.append("Thread:   ", style="dim")
+        parts.append(f"{thread_id}\n", style="bright_white")
+    if user_id:
+        parts.append("User:     ", style="dim")
+        parts.append(f"{user_id}", style="bright_white")
+    console.print()
+    console.print(Panel(parts, border_style="bright_green", box=box.DOUBLE_EDGE))
+
+
+def log_node_start(node_name, step):
+    style, label = NODE_STYLES.get(node_name, ("bold white", node_name))
+    console.print()
+    console.rule(f"[{style}] Step {step} | {label} [/]", style=style)
+
+
+def log_node_detail(key, value, style="bright_white"):
+    console.print(f"  [dim]{key + ':':<22}[/] [{style}]{value}[/]")
+
+
+def log_node_complete(node_name, duration_ms=None):
+    style, label = NODE_STYLES.get(node_name, ("bold white", node_name))
+    dur = f" ({duration_ms:.0f}ms)" if duration_ms else ""
+    console.print(f"  [{style}]>> {label} complete{dur}[/]")
+
+
+def _log_node_details(node_name, state):
+    if node_name == "classify_intent":
+        log_node_detail("User Question", state.get("user_question", "?")[:100])
+        intent = state.get("intent", "?")
+        conf = state.get("intent_confidence", 0)
+        log_node_detail("Detected Intent", intent, style="bold cyan")
+        log_node_detail("Confidence", f"{conf:.0%}", style="bold cyan" if conf >= 0.6 else "bold red")
+        missing = state.get("_missing_filters", [])
+        if missing:
+            log_node_detail("Missing Filters", ", ".join(missing), style="yellow")
+        log_node_detail("Needs Clarification", str(state.get("needs_clarification", False)))
+
+    elif node_name == "clarify_or_disambiguate":
+        log_node_detail("Intent (refined)", state.get("intent", "?"), style="bold yellow")
+        log_node_detail("Confidence (refined)", f"{state.get('intent_confidence', 0):.0%}")
+        if state.get("clarification_message"):
+            log_node_detail("Clarification", state["clarification_message"][:120], style="yellow")
+
+    elif node_name == "resolve_assets":
+        assets = state.get("resolved_assets") or {}
+        log_node_detail("Domain", assets.get("domain", "N/A"), style="bold green")
+        gs = assets.get("genie_space")
+        log_node_detail("Genie Space", gs[:36] + "..." if gs and len(gs) > 36 else (gs or "None"))
+        log_node_detail("Doc VS Index", assets.get("doc_vs_index") or "None")
+        all_assets = assets.get("all_assets", [])
+        log_node_detail("Total Assets", str(len(all_assets)))
+        endorsed = [a for a in all_assets if a.get("endorsement_level") == "endorsed"]
+        if endorsed:
+            log_node_detail("Endorsed", str(len(endorsed)), style="bold green")
+
+    elif node_name == "genie":
+        gr = state.get("genie_results") or {}
+        status = gr.get("status", "N/A")
+        log_node_detail("Status", status, style="bold blue" if status == "success" else "bold red")
+        if gr.get("sql"):
+            log_node_detail("SQL Query", gr["sql"][:120])
+        if gr.get("result_summary") and status == "success":
+            log_node_detail("Result Preview", str(gr["result_summary"])[:120])
+        if gr.get("error"):
+            log_node_detail("Error", str(gr["error"])[:120], style="red")
+
+    elif node_name == "multi_tool":
+        mt = state.get("multi_tool_results") or {}
+        status = mt.get("status", "N/A")
+        log_node_detail("Status", status, style="bold magenta" if status == "success" else "bold red")
+        docs = mt.get("docs", [])
+        log_node_detail("Docs Retrieved", str(len(docs)))
+        for i, doc in enumerate(docs[:3]):
+            log_node_detail(f"  Doc {i+1}", doc.get("title", "untitled")[:60])
+        if mt.get("error"):
+            log_node_detail("Error", str(mt["error"])[:120], style="red")
+
+    elif node_name == "compose_answer":
+        answer = state.get("final_answer", "")
+        log_node_detail("Answer Length", f"{len(answer)} chars")
+        preview = answer[:150].replace("\n", " ")
+        log_node_detail("Preview", preview + ("..." if len(answer) > 150 else ""))
+
+
+def _with_logging(node_name, fn):
+    def wrapper(state):
+        step = _next_step()
+        log_node_start(node_name, step)
+        _start = time.time()
+        result = fn(state)
+        _dur = (time.time() - _start) * 1000
+        _log_node_details(node_name, result)
+        log_node_complete(node_name, _dur)
+        return result
+    return wrapper
+
+
+def log_flow_end(result, duration_s=None):
+    table = Table(
+        title="Flow Complete",
+        box=box.ROUNDED,
+        border_style="bright_green",
+        title_style="bold bright_green",
+        show_lines=False,
+    )
+    table.add_column("Field", style="dim", width=22)
+    table.add_column("Value", style="bright_white")
+
+    intent = result.get("intent", "?")
+    conf = result.get("intent_confidence", 0)
+    table.add_row("Intent", f"{intent} ({conf:.0%})")
+
+    assets = result.get("resolved_assets") or {}
+    table.add_row("Domain", assets.get("domain", "N/A"))
+
+    agents = []
+    if result.get("genie_results"):
+        agents.append("genie")
+    if result.get("multi_tool_results"):
+        agents.append("multi_tool")
+    table.add_row("Agents Used", ", ".join(agents) if agents else "none (direct answer)")
+
+    warnings = result.get("warnings", [])
+    table.add_row("Warnings", str(len(warnings)))
+
+    if duration_s is not None:
+        table.add_row("Total Duration", f"{duration_s:.1f}s")
+
+    answer = result.get("final_answer", "")
+    table.add_row("Answer Length", f"{len(answer)} chars")
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+print("Rich flow logging utilities initialized")
+
+# COMMAND ---------- [markdown]
+# ## SQL Helper
+# 
+# Executes SQL via the Databricks SDK Statement Execution API — works in both notebooks and Model Serving (no Spark required).
+
+# COMMAND ----------
 def _run_sql(sql_statement, max_rows=50):
     """Execute SQL via Databricks SDK Statement Execution API."""
     from databricks.sdk import WorkspaceClient
@@ -59,7 +248,7 @@ def _run_sql(sql_statement, max_rows=50):
     )
     if response.status and response.status.state and response.status.state.value == "SUCCEEDED":
         columns = []
-        column_meta = []  # list of {"name": ..., "type_name": ...}
+        column_meta = []
         try:
             manifest = response.manifest
             if manifest:
@@ -73,7 +262,6 @@ def _run_sql(sql_statement, max_rows=50):
                     column_meta = [{"name": c.name, "type_name": (getattr(c, 'type_text', None) or getattr(c, 'type_name', None) or 'STRING').upper()} for c in cols_obj]
         except (AttributeError, TypeError):
             pass
-        # Fallback: parse column names from SELECT statement
         if not columns:
             import re
             m = re.match(r'\s*SELECT\s+(.+?)\s+FROM\s', sql_statement, re.IGNORECASE | re.DOTALL)
@@ -95,8 +283,12 @@ def _run_sql(sql_statement, max_rows=50):
             error_msg = response.status.error.message
         raise Exception(f"SQL failed: {error_msg}")
 
+# COMMAND ---------- [markdown]
+# ## Prompt Management (P1)
+# 
+# Loads prompts from `ai_ops.agent_instructions` with a 5-minute cache. Falls back to hardcoded prompts if the table isn't ready.
 
-# --- Prompt Management (P1) ---
+# COMMAND ----------
 _prompt_cache = {}
 _prompt_cache_ts = 0
 
@@ -130,14 +322,17 @@ def _get_prompt(agent_id, scope, fallback=""):
     key = f"{agent_id}:{scope}"
     return prompts.get(key, fallback)
 
+# COMMAND ---------- [markdown]
+# ## Short-term Memory (P0)
+# 
+# Delta-based conversation checkpoints for multi-turn sessions. Saves/loads state from `ai_ops.conversations`.
 
-# --- Short-term Memory (P0): Delta-based checkpoint ---
+# COMMAND ----------
 def _save_checkpoint(thread_id, state_data):
     """Save conversation checkpoint to Delta table."""
     try:
         checkpoint_id = hashlib.md5(f"{thread_id}:{time.time()}".encode()).hexdigest()[:16]
         state_json = json.dumps(state_data, default=str).replace("'", "''")
-        # Escape any single quotes in state_json for SQL safety
         safe_json = state_json.replace("\\", "\\\\")
         _run_sql(f"""
             INSERT INTO {CATALOG}.ai_ops.conversations
@@ -163,8 +358,12 @@ def _load_checkpoint(thread_id):
         pass
     return None
 
+# COMMAND ---------- [markdown]
+# ## Long-term Memory (P2)
+# 
+# User preferences and facts stored in `ai_ops.user_memory` for personalized responses across sessions.
 
-# --- P2: Long-term Memory ---
+# COMMAND ----------
 _memory_cache = {}
 _memory_cache_ts = 0
 
@@ -210,7 +409,6 @@ def _save_user_memory(user_id, memory_key, memory_value, memory_type="preference
                 t.memory_type = s.memory_type, t.confidence = s.confidence, t.updated_at = s.updated_at
             WHEN NOT MATCHED THEN INSERT *
         """)
-        # Invalidate cache
         global _memory_cache, _memory_cache_ts
         _memory_cache_ts = 0
     except Exception:
@@ -249,7 +447,12 @@ If no personal facts were shared, respond: {{"facts": []}}"""
     except Exception:
         pass
 
+# COMMAND ---------- [markdown]
+# ## Episodic Memory (P2)
+# 
+# Logs interactions to `ai_ops.episodic_memory` and retrieves lessons from similar past queries for continuous improvement.
 
+# COMMAND ----------
 def _save_episodic_memory(thread_id, user_id, question, intent, domain, agents_used, outcome="success"):
     """Log this interaction to episodic_memory for continuous learning."""
     try:
@@ -280,8 +483,12 @@ def _get_episodic_lessons(intent, domain, limit=3):
     except Exception:
         return []
 
+# COMMAND ---------- [markdown]
+# ## Tool Registry (P2)
+# 
+# Loads agent capabilities from `ai_ops.agent_capabilities` for semantic routing decisions.
 
-# --- P2: Tool Registry ---
+# COMMAND ----------
 _capabilities_cache = []
 _capabilities_cache_ts = 0
 
@@ -305,8 +512,12 @@ def _load_agent_capabilities():
     except Exception:
         return []
 
+# COMMAND ---------- [markdown]
+# ## Agent State & LLM
+# 
+# The `AgentState` TypedDict defines all fields that flow through the LangGraph nodes.
 
-# --- State ---
+# COMMAND ----------
 class AgentState(TypedDict):
     messages: list
     user_question: str
@@ -323,21 +534,24 @@ class AgentState(TypedDict):
     user_id: Optional[str]
 
 
-# --- LLM ---
 llm = ChatDatabricks(endpoint=MODEL_ENDPOINT, temperature=0.1, max_tokens=2000)
+print(f"LLM initialized: {MODEL_ENDPOINT}")
 
+# COMMAND ---------- [markdown]
+# ## Node 1: Classify Intent
+# 
+# Classifies user questions into: `simple_kpi`, `document_lookup`, or `conversational`.
+# Also resolves short follow-up questions using conversation history.
 
-# --- Node 1: Classify Intent ---
-@mlflow.trace(name="classify_intent", span_type=SpanType.CHAIN)
+# COMMAND ----------
+# @mlflow.trace(name="classify_intent", span_type=SpanType.CHAIN)
 def classify_intent(state):
     question = state["user_question"]
 
-    # Resolve short follow-ups into full questions using conversation context
     messages = state.get("messages", [])
     state.setdefault("warnings", [])
 
     if len(messages) > 1 and len(question.split()) <= 10:
-        # Get recent conversation excluding the current user message
         recent = messages[-(min(len(messages), 6)):-1]
         if recent:
             conv_lines = [f"{m.get('role','user')}: {m.get('content','')[:300]}" for m in recent]
@@ -367,7 +581,6 @@ Respond in JSON format ONLY:
 
 If the question is ambiguous or missing key filters (like region, time period, product), list them in missing_filters."""
 
-    # P2: Enrich with user memory context if available
     user_id = state.get("user_id") or "default"
     memory_context = ""
     user_mem = _load_user_memory(user_id)
@@ -411,9 +624,13 @@ If the question is ambiguous or missing key filters (like region, time period, p
 
     return state
 
+# COMMAND ---------- [markdown]
+# ## Node 2: Clarify or Disambiguate
+# 
+# Activated when intent confidence is low or required filters are missing. Attempts to infer from conversation context before asking the user.
 
-# --- Node 2: Clarify or Disambiguate (optional) ---
-@mlflow.trace(name="clarify_or_disambiguate", span_type=SpanType.CHAIN)
+# COMMAND ----------
+# @mlflow.trace(name="clarify_or_disambiguate", span_type=SpanType.CHAIN)
 def clarify_or_disambiguate(state):
     """When intent confidence is low or required filters are missing,
     attempt to infer from context or generate a clarification message."""
@@ -467,13 +684,18 @@ Respond in JSON:
 
     if not resolved and clarification:
         state["clarification_message"] = clarification
-        state["warnings"].append(f"Note: The question may benefit from clarification — {clarification}")
+        state["warnings"].append(f"Note: The question may benefit from clarification \u2014 {clarification}")
 
     state["needs_clarification"] = False
     return state
 
+# COMMAND ---------- [markdown]
+# ## Default Assets Fallback
+# 
+# Rule-based asset resolution used when the Vector Search Context Index is not available.
+# Only resolves the two asset types supported by workers: `genie_space` and `document_index`.
 
-# --- Default assets fallback ---
+# COMMAND ----------
 def _get_default_assets(intent="simple_kpi"):
     default_space_id = "01f12199fed5107a9d2ccac293b2c0b6"
     return {
@@ -490,8 +712,12 @@ def _get_default_assets(intent="simple_kpi"):
         "endorsement_info": {},
     }
 
+# COMMAND ---------- [markdown]
+# ## Node 3: Resolve Assets via Context Index
+# 
+# Uses Vector Search to semantically match the user question to available data assets (Genie Spaces, Document Indexes). Endorsed assets are prioritized. The `metadata` column carries worker-specific config (e.g. `vs_index` for document indexes).
 
-# --- Node 3: Resolve Assets via Context Index (Vector Search) ---
+# COMMAND ----------
 @mlflow.trace(name="resolve_assets_with_context_index", span_type=SpanType.RETRIEVER)
 def resolve_assets_with_context_index(state):
     from databricks.sdk import WorkspaceClient
@@ -550,27 +776,17 @@ def resolve_assets_with_context_index(state):
         }
     except Exception as e:
         state["resolved_assets"] = _get_default_assets(intent)
-        state["warnings"].append("Context Index not ready — using rule-based asset resolution")
+        state["warnings"].append("Context Index not ready \u2014 using rule-based asset resolution")
     return state
 
+# COMMAND ---------- [markdown]
+# ## Scoped Context Index Lookup & Asset Feedback
+# 
+# Worker agents use scoped lookups to discover additional assets within their domain. Feedback is recorded for governance improvement.
 
-# --- Scoped Context Index Lookup (for Worker Agents) ---
+# COMMAND ----------
 def _scoped_context_index_lookup(query_text, domain, asset_types=None, num_results=5):
-    """Worker-scoped Context Index lookup.
-
-    Worker agents call this to discover additional assets *within* the domain
-    the Supervisor already resolved.  They cannot change domains or override
-    the Supervisor's global asset selection.
-
-    Args:
-        query_text: semantic search query (e.g. "product hierarchy table")
-        domain: the domain resolved by the Supervisor (e.g. "claims")
-        asset_types: optional list to filter (e.g. ["genie_space", "document_index"])
-        num_results: max results to return (default 5)
-
-    Returns:
-        list of asset dicts, or empty list on failure.
-    """
+    """Worker-scoped Context Index lookup within a single domain."""
     try:
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient()
@@ -586,11 +802,9 @@ def _scoped_context_index_lookup(query_text, domain, asset_types=None, num_resul
                 "text": row[3], "domain": row[4], "endorsement_level": row[5],
                 "score": float(row[6]) if len(row) > 6 else 0.0,
             }
-            # Scope restriction: only return assets in the Supervisor's resolved domain
             if asset.get("domain", "").lower() == domain.lower():
                 if asset_types is None or asset.get("asset_type") in asset_types:
                     assets.append(asset)
-        # Prefer endorsed assets
         assets.sort(key=lambda a: (0 if a.get("endorsement_level") == "endorsed" else 1, -a.get("score", 0)))
         return assets
     except Exception:
@@ -598,18 +812,7 @@ def _scoped_context_index_lookup(query_text, domain, asset_types=None, num_resul
 
 
 def _record_asset_feedback(agent_name, domain, feedback_type, details, state):
-    """Record feedback when a worker agent discovers missing or useful assets.
-
-    This writes to the feedback table so that the ontology and Genie Spaces
-    can be improved over time via governance — not ad-hoc at runtime.
-
-    Args:
-        agent_name: which agent discovered the gap (e.g. "genie", "multi_tool")
-        domain: the domain context
-        feedback_type: e.g. "genie_query_failed", "missing_document_index"
-        details: freeform description of the gap
-        state: the supervisor state (to attach user_id, question context)
-    """
+    """Record feedback when a worker agent discovers missing or useful assets."""
     try:
         user_id = state.get("user_id", "default")
         question = state.get("user_question", "")[:200].replace("'", "''")
@@ -621,11 +824,14 @@ def _record_asset_feedback(agent_name, domain, feedback_type, details, state):
                     '{question}', '{user_id}', current_timestamp())
         """)
     except Exception:
-        # Table may not exist yet — silently skip; governance can create it later
         pass
 
+# COMMAND ---------- [markdown]
+# ## Node 4: Genie Agent (Multi-Space)
+# 
+# Iterates through ranked Genie Spaces resolved from the Context Index (`resolved_assets.genie_spaces`). Tries the best-matching space first and falls back to the next space if it fails. The `_query_genie_space` helper encapsulates a single Genie API call for reuse.
 
-# --- Genie API helper (reusable per-space call) ---
+# COMMAND ----------
 def _query_genie_space(w, space_id, question):
     """Call the Genie API for a single space and return a result dict."""
     try:
@@ -659,7 +865,6 @@ def _query_genie_space(w, space_id, question):
         return {"error": str(e)[:200], "status": "failed"}
 
 
-# --- Node 4: Genie Agent (Multi-Space) ---
 @mlflow.trace(name="route_to_genie", span_type=SpanType.TOOL)
 def route_to_genie(state):
     from databricks.sdk import WorkspaceClient
@@ -676,7 +881,7 @@ def route_to_genie(state):
     if not genie_spaces:
         state["genie_results"] = {"error": "No Genie Spaces resolved from Context Index",
                                   "status": "failed"}
-        state["warnings"].append("Genie Space not found in resolved assets — check Context Index")
+        state["warnings"].append("Genie Space not found in resolved assets \u2014 check Context Index")
         return state
 
     attempts = []
@@ -719,8 +924,12 @@ def route_to_genie(state):
 
     return state
 
+# COMMAND ---------- [markdown]
+# ## Node 5: Multi-Tool Agent (RAG)
+# 
+# Performs Vector Search RAG over policy documents for document lookup queries. The VS index name is dynamically resolved from the Context Index (`resolved_assets.doc_vs_index`).
 
-# --- Node 5: Multi-Tool Agent (RAG) ---
+# COMMAND ----------
 @mlflow.trace(name="route_to_multi_tool", span_type=SpanType.TOOL)
 def route_to_multi_tool(state):
     """Vector Search RAG over policy documents using the VS index resolved from Context Index."""
@@ -732,7 +941,7 @@ def route_to_multi_tool(state):
         results["docs"] = []
         results["error"] = "No document VS index resolved from Context Index"
         results["status"] = "failed"
-        state["warnings"].append("Document VS index not found in resolved assets — check Context Index")
+        state["warnings"].append("Document VS index not found in resolved assets \u2014 check Context Index")
         state["multi_tool_results"] = results
         return state
 
@@ -758,8 +967,12 @@ def route_to_multi_tool(state):
     state["multi_tool_results"] = results
     return state
 
+# COMMAND ---------- [markdown]
+# ## Node 6: Compose Final Answer
+# 
+# Synthesizes results from all agents into a natural, conversational response. Incorporates user memory for personalization and episodic lessons for improvement.
 
-# --- Node 8: Compose Final Answer ---
+# COMMAND ----------
 @mlflow.trace(name="compose_answer", span_type=SpanType.CHAIN)
 def compose_answer(state):
     question = state["user_question"]
@@ -771,17 +984,14 @@ def compose_answer(state):
 
     context_parts = []
 
-    # Genie results (includes which space answered)
     if genie and genie.get("status") == "success":
         space_name = genie.get("display_name", "Genie Agent")
         context_parts.append(f"**{space_name}:** SQL: {genie.get('sql', 'N/A')}\nResult: {genie.get('result_summary', 'N/A')}")
 
-    # Multi-tool RAG results
     if multi_tool and multi_tool.get("docs"):
         doc_text = "\n".join([f"- {d['title']}: {d['content'][:200]}..." for d in multi_tool["docs"][:3]])
         context_parts.append(f"**Documents:**\n{doc_text}")
 
-    # P2: Episodic memory — retrieve lessons from similar past interactions
     domain = assets.get("domain", "unknown") if assets else "unknown"
     lessons = _get_episodic_lessons(intent, domain)
     if lessons:
@@ -789,7 +999,6 @@ def compose_answer(state):
         if lesson_text:
             context_parts.append(f"**Past experience (internal):**\n{lesson_text}")
 
-    # P2: User memory context for personalization
     user_id = state.get("user_id") or "default"
     user_mem = _load_user_memory(user_id)
     if user_mem:
@@ -802,7 +1011,6 @@ def compose_answer(state):
             pref_parts.append(f"response style: {user_mem['response_length']}")
         if user_mem.get("role"):
             pref_parts.append(f"user role: {user_mem['role']}")
-        # Include any other stored preferences
         for k, v in user_mem.items():
             if k not in ("name", "preferred_view", "response_length", "role",
                          "preferred_region", "preferred_domain", "display_currency",
@@ -816,7 +1024,7 @@ def compose_answer(state):
 
     context = "\n\n".join(context_parts) if context_parts else "No agent results available."
 
-    warning_text = "\n\nCRITICAL RULE: NEVER include a 'Warnings & Limitations' section, warnings, caveats, disclaimers, or notes about data limitations in your answer. These are handled separately by the UI. Your answer must end after the main content — do not append any warning/limitation section."
+    warning_text = "\n\nCRITICAL RULE: NEVER include a 'Warnings & Limitations' section, warnings, caveats, disclaimers, or notes about data limitations in your answer. These are handled separately by the UI. Your answer must end after the main content \u2014 do not append any warning/limitation section."
 
     clarification_text = ""
     if clarification:
@@ -828,7 +1036,7 @@ Agent Results:
 {context}
 
 Instructions:
-- Answer like a knowledgeable insurance colleague — direct, natural, and helpful.
+- Answer like a knowledgeable insurance colleague \u2014 direct, natural, and helpful.
 - Lead with the key insight or answer, not an introduction or preamble.
 - Include specific numbers and data from the results naturally in your sentences.
 - When the answer warrants detail (trends, analysis, comparisons), provide thorough explanations.
@@ -840,8 +1048,12 @@ Instructions:
     state["final_answer"] = response.content
     return state
 
+# COMMAND ---------- [markdown]
+# ## Routing Logic
+# 
+# Conditional edge functions that determine the LangGraph traversal path.
 
-# --- Routing Logic ---
+# COMMAND ----------
 def should_clarify(state):
     """Route to clarification if confidence is low."""
     if state.get("needs_clarification", False):
@@ -882,16 +1094,24 @@ def route_by_intent(state):
         return "genie" if has_genie else "multi_tool"
     return "multi_tool"
 
+# COMMAND ---------- [markdown]
+# ## Build LangGraph
+# 
+# Compiles the full state graph:
+# 
+# ```
+# START -> classify_intent -> [clarify] -> resolve_assets -> [genie | multi_tool | compose_answer] -> compose_answer -> END
+# ```
 
-# --- Build LangGraph ---
+# COMMAND ----------
 workflow = StateGraph(AgentState)
 
-workflow.add_node("classify_intent", classify_intent)
-workflow.add_node("clarify_or_disambiguate", clarify_or_disambiguate)
-workflow.add_node("resolve_assets", resolve_assets_with_context_index)
-workflow.add_node("genie", route_to_genie)
-workflow.add_node("multi_tool", route_to_multi_tool)
-workflow.add_node("compose_answer", compose_answer)
+workflow.add_node("classify_intent", _with_logging("classify_intent", classify_intent))
+workflow.add_node("clarify_or_disambiguate", _with_logging("clarify_or_disambiguate", clarify_or_disambiguate))
+workflow.add_node("resolve_assets", _with_logging("resolve_assets", resolve_assets_with_context_index))
+workflow.add_node("genie", _with_logging("genie", route_to_genie))
+workflow.add_node("multi_tool", _with_logging("multi_tool", route_to_multi_tool))
+workflow.add_node("compose_answer", _with_logging("compose_answer", compose_answer))
 
 workflow.add_edge(START, "classify_intent")
 
@@ -914,8 +1134,19 @@ workflow.add_edge("compose_answer", END)
 
 graph = workflow.compile()
 
+print(f"Graph compiled with nodes: {list(graph.nodes)}")
 
-# --- ResponsesAgent Wrapper ---
+# COMMAND ----------
+from IPython.display import Image, display
+
+display(Image(graph.get_graph().draw_mermaid_png()))
+
+# COMMAND ---------- [markdown]
+# ## ResponsesAgent Wrapper
+# 
+# The `SupervisorResponsesAgent` wraps the LangGraph in an MLflow `ResponsesAgent` for Model Serving deployment. It handles message parsing, memory management, and custom I/O.
+
+# COMMAND ----------
 class SupervisorResponsesAgent(ResponsesAgent):
 
     @mlflow.trace(span_type=SpanType.AGENT)
@@ -946,15 +1177,12 @@ class SupervisorResponsesAgent(ResponsesAgent):
                 output=[self.create_text_output_item(text="Please ask a question.", id="msg_empty")]
             )
 
-        # Extract custom_inputs (P0: thread_id, user_id, domain)
         custom_inputs = {}
         if hasattr(request, "custom_inputs") and request.custom_inputs:
             custom_inputs = request.custom_inputs if isinstance(request.custom_inputs, dict) else {}
         thread_id = custom_inputs.get("thread_id")
         user_id = custom_inputs.get("user_id")
 
-        # Load previous conversation state if thread_id provided (P0: short-term memory)
-        # Only use checkpoint if the input doesn't already contain conversation history
         prior_state = None
         if thread_id and len(all_messages) <= 1:
             prior_state = _load_checkpoint(thread_id)
@@ -978,10 +1206,12 @@ class SupervisorResponsesAgent(ResponsesAgent):
             "user_id": user_id,
         }
 
+        log_flow_start(user_message, thread_id, user_id)
+        _flow_start = time.time()
         result = graph.invoke(initial_state)
+        _flow_duration = time.time() - _flow_start
         answer = result.get("final_answer", "I was unable to process your question.")
 
-        # Save checkpoint (P0: short-term memory)
         checkpoint_id = None
         if thread_id:
             checkpoint_data = {
@@ -991,7 +1221,6 @@ class SupervisorResponsesAgent(ResponsesAgent):
             }
             checkpoint_id = _save_checkpoint(thread_id, checkpoint_data)
 
-        # P2: Log episodic memory for learning
         agents_used = []
         if result.get("genie_results"):
             agents_used.append("genie")
@@ -1012,12 +1241,10 @@ class SupervisorResponsesAgent(ResponsesAgent):
             outcome=ep_outcome,
         )
 
-        # P2: Extract user facts only for conversational messages (not data queries)
         intent = result.get("intent", "")
         if intent in ("conversational", "unknown", "greeting"):
             _extract_and_save_user_facts(user_id or "default", user_message, answer)
 
-        # Build nodes_executed list
         nodes_executed = [n for n in [
             "classify_intent",
             "clarify_or_disambiguate" if result.get("clarification_message") else None,
@@ -1027,7 +1254,6 @@ class SupervisorResponsesAgent(ResponsesAgent):
             "compose_answer",
         ] if n is not None]
 
-        # Build custom_outputs (P0)
         resolved = result.get("resolved_assets", {})
         domain = resolved.get("domain", "unknown") if resolved else "unknown"
 
@@ -1048,6 +1274,7 @@ class SupervisorResponsesAgent(ResponsesAgent):
                 "docs_found": len(mt.get("docs", [])) if mt.get("docs") else 0,
                 "doc_vs_index": resolved.get("doc_vs_index") if resolved else None,
             }
+
         custom_outputs = {
             "intent": result.get("intent", "unknown"),
             "intent_confidence": result.get("intent_confidence", 0.0),
@@ -1062,8 +1289,9 @@ class SupervisorResponsesAgent(ResponsesAgent):
             "checkpoint_id": checkpoint_id,
         }
 
-        # Return metadata as second output item (for backwards compatibility with app.py)
         metadata_json = json.dumps(custom_outputs)
+
+        log_flow_end(result, duration_s=_flow_duration)
 
         return ResponsesAgentResponse(
             output=[
@@ -1076,3 +1304,841 @@ class SupervisorResponsesAgent(ResponsesAgent):
 
 agent = SupervisorResponsesAgent()
 set_model(agent)
+print("SupervisorResponsesAgent created and registered with set_model()")
+
+# COMMAND ---------- [markdown]
+# ---
+# 
+# ## Test: Run with graph.invoke() (Direct)
+# 
+# Invoke the LangGraph directly to test individual nodes and inspect the full state.
+
+# COMMAND ----------
+# test_question = "What are the surgical fee limits for the Critical Illness Elite Plan?"
+
+# state = {
+#     "messages": [{"role": "user", "content": test_question}],
+#     "user_question": test_question,
+#     "intent": "",
+#     "intent_confidence": 0.0,
+#     "clarification_message": None,
+#     "needs_clarification": False,
+#     "resolved_assets": None,
+#     "genie_results": None,
+#     "multi_tool_results": None,
+#     "final_answer": None,
+#     "warnings": [],
+#     "thread_id": None,
+#     "user_id": None,
+# }
+
+# result = graph.invoke(state)
+
+# print(f"Intent: {result['intent']} (confidence: {result.get('intent_confidence', 0):.0%})")
+# print(f"Domain: {result.get('resolved_assets', {}).get('domain', 'N/A')}")
+# print(f"Genie: {'yes' if result.get('genie_results') else 'no'}")
+# print(f"Multi-Tool: {'yes' if result.get('multi_tool_results') else 'no'}")
+# if result.get('warnings'):
+#     print(f"Warnings: {result['warnings']}")
+# print(f"\n{'='*70}")
+# print(result['final_answer'])
+
+# COMMAND ---------- [markdown]
+# ## Test: Run with SupervisorResponsesAgent.predict() (Full Path)
+# 
+# Exercises the complete production code path including memory, episodic logging, and custom I/O.
+
+# COMMAND ----------
+# request = ResponsesAgentRequest(
+#     input=[
+#         {"role": "user", "content": "What does the AIA Health plan cover?"}
+#     ],
+#     custom_inputs={
+#         "thread_id": "notebook-test-001",
+#         "user_id": "notebook-user",
+#     }
+# )
+
+# response = agent.predict(request)
+
+# for item in response.output:
+#     item_id = getattr(item, "id", "")
+#     text = getattr(item, "text", "")
+#     if item_id == "msg_answer":
+#         print("=== ANSWER ===")
+#         print(text)
+#     elif item_id == "msg_metadata":
+#         print("\n=== METADATA ===")
+#         metadata = json.loads(text)
+#         print(json.dumps(metadata, indent=2))
+
+# COMMAND ---------- [markdown]
+# ## Test: Multi-Turn Conversation
+# 
+# Tests the short-term memory (Delta checkpoint) by sending a follow-up question on the same `thread_id`.
+
+# COMMAND ----------
+# # Follow-up on the same thread
+# follow_up = ResponsesAgentRequest(
+#     input=[
+#         {"role": "user", "content": "Which region has the highest fraud score?"}
+#     ],
+#     custom_inputs={
+#         "thread_id": "notebook-test-001",
+#         "user_id": "notebook-user",
+#     }
+# )
+
+# follow_up_response = agent.predict(follow_up)
+
+# for item in follow_up_response.output:
+#     item_id = getattr(item, "id", "")
+#     text = getattr(item, "text", "")
+#     if item_id == "msg_answer":
+#         print("=== FOLLOW-UP ANSWER ===")
+#         print(text)
+#     elif item_id == "msg_metadata":
+#         print("\n=== METADATA ===")
+#         metadata = json.loads(text)
+#         print(f"Intent: {metadata['intent']} | Nodes: {metadata['nodes_executed']}")
+
+# COMMAND ---------- [markdown]
+# ---
+# 
+# # Memory Lifecycle Demo
+# 
+# This section demonstrates **end-to-end memory population and retrieval** across the three memory layers:
+# 
+# | Layer | Table | Purpose |
+# |-------|-------|---------|
+# | **Short-term** | `ai_ops.conversations` | Delta checkpoints for multi-turn context |
+# | **Long-term** | `ai_ops.user_memory` | Persistent user preferences & facts |
+# | **Episodic** | `ai_ops.episodic_memory` | Interaction logs & lessons learned |
+# 
+# **Flow:**
+# 1. Check baseline state of all memory tables for our demo user
+# 2. Send a **conversational** request that reveals personal facts → triggers fact extraction into `user_memory`
+# 3. Inspect all 3 tables to confirm they were populated
+# 4. Send a **follow-up data query** on the same thread → uses short-term memory for context + long-term memory for personalization
+# 5. Inspect tables again to see the new checkpoint and episodic entry
+# 6. Send a **third query** → demonstrates episodic lessons and user preferences flowing into the response
+
+# COMMAND ---------- [markdown]
+# ### Step 1: Prepare — Clean Prior Demo Data, Update Classifier Prompt, Check Baseline
+# 
+# Cleans up stale data from prior runs, updates the `classify_intent` prompt in the `agent_instructions` table
+# to include the `conversational` category, and then queries all three memory tables to establish a clean starting point.
+
+# COMMAND ----------
+DEMO_THREAD_ID = "memory-demo-thread-001"
+DEMO_USER_ID = "demo-user-sarah"
+
+# --- Clean up prior demo runs ---
+print("Cleaning up prior demo data...")
+try:
+    _run_sql(f"DELETE FROM {CATALOG}.ai_ops.conversations WHERE thread_id = '{DEMO_THREAD_ID}'")
+    print("  Cleared conversations checkpoints")
+except Exception:
+    pass
+try:
+    _run_sql(f"DELETE FROM {CATALOG}.ai_ops.user_memory WHERE user_id = '{DEMO_USER_ID}'")
+    print("  Cleared user_memory entries")
+except Exception:
+    pass
+try:
+    _run_sql(f"DELETE FROM {CATALOG}.ai_ops.episodic_memory WHERE thread_id = '{DEMO_THREAD_ID}'")
+    print("  Cleared episodic_memory entries")
+except Exception:
+    pass
+
+# --- Update classify_intent prompt in agent_instructions to include "conversational" ---
+print("\nUpdating classify_intent prompt in agent_instructions...")
+try:
+    updated_prompt = """You are an intent classifier for an insurance analytics system.
+Classify the following question into exactly ONE category and provide a confidence score (0.0 to 1.0).
+
+Categories:
+- "simple_kpi": Simple KPI/metric questions (counts, totals, averages, trends by region/product/time)
+- "document_lookup": Policy terms, coverage details, exclusions, procedures, document search
+- "conversational": Greetings, introductions, personal statements, small talk, or non-analytical messages
+
+Question: {question}
+
+Respond in JSON format ONLY:
+{{"intent": "<category>", "confidence": <float>, "missing_filters": []}}
+
+If the question is ambiguous or missing key filters (like region, time period, product), list them in missing_filters."""
+
+    prompt_escaped = updated_prompt.replace("'", "''")
+    _run_sql(f"""
+        UPDATE {CATALOG}.ai_ops.agent_instructions
+        SET base_prompt = '{prompt_escaped}',
+            updated_at = current_timestamp(),
+            updated_by = 'memory-demo'
+        WHERE agent_id = 'supervisor' AND scope = 'classify_intent'
+    """)
+    print("  Updated supervisor:classify_intent prompt with 'conversational' category")
+except Exception as e:
+    print(f"  Could not update prompt (will use fallback): {str(e)[:150]}")
+
+# Invalidate prompt cache so the updated prompt is loaded
+_prompt_cache.clear()
+_prompt_cache_ts = 0
+_memory_cache_ts = 0
+print("  Caches invalidated")
+
+# --- Patch classify_intent to accept 'conversational' and recompile graph ---
+print("\nRecompiling graph with 'conversational' intent support...")
+
+_orig_classify_intent = classify_intent
+
+def classify_intent_patched(state):
+    """Wraps classify_intent to accept 'conversational' as a valid intent."""
+    state = _orig_classify_intent(state)
+    # The original function may have overridden 'conversational' to 'simple_kpi'
+    # because its valid list didn't include it. Re-classify if needed.
+    if state["intent"] == "simple_kpi" and state.get("intent_confidence", 0) < 0.7:
+        question = state.get("user_question", "").lower()
+        greet_signals = ["hi ", "hello", "hey ", "i'm ", "i am ", "my name", "nice to meet"]
+        if any(sig in question for sig in greet_signals):
+            state["intent"] = "conversational"
+            state["needs_clarification"] = False
+    return state
+
+classify_intent = classify_intent_patched
+
+_orig_route_by_intent = route_by_intent
+
+def route_by_intent_patched(state):
+    """Wraps route_by_intent to handle 'conversational' intent."""
+    intent = state.get("intent", "simple_kpi")
+    if intent == "conversational":
+        return "compose_answer"
+    return _orig_route_by_intent(state)
+
+route_by_intent = route_by_intent_patched
+
+workflow = StateGraph(AgentState)
+workflow.add_node("classify_intent", _with_logging("classify_intent", classify_intent))
+workflow.add_node("clarify_or_disambiguate", _with_logging("clarify_or_disambiguate", clarify_or_disambiguate))
+workflow.add_node("resolve_assets", _with_logging("resolve_assets", resolve_assets_with_context_index))
+workflow.add_node("genie", _with_logging("genie", route_to_genie))
+workflow.add_node("multi_tool", _with_logging("multi_tool", route_to_multi_tool))
+workflow.add_node("compose_answer", _with_logging("compose_answer", compose_answer))
+
+workflow.add_edge(START, "classify_intent")
+workflow.add_conditional_edges(
+    "classify_intent", should_clarify,
+    {"clarify": "clarify_or_disambiguate", "resolve": "resolve_assets"},
+)
+workflow.add_edge("clarify_or_disambiguate", "resolve_assets")
+workflow.add_conditional_edges(
+    "resolve_assets", route_by_intent,
+    {"genie": "genie", "multi_tool": "multi_tool", "compose_answer": "compose_answer"},
+)
+workflow.add_edge("genie", "compose_answer")
+workflow.add_edge("multi_tool", "compose_answer")
+workflow.add_edge("compose_answer", END)
+
+graph = workflow.compile()
+print(f"  Graph recompiled with nodes: {list(graph.nodes)}")
+
+# Update the agent instance to use the new graph
+agent = SupervisorResponsesAgent()
+print("  Agent re-initialized\n")
+
+
+def inspect_memory_tables(thread_id, user_id, label=""):
+    """Helper to query and display all three memory tables."""
+    header = f"\n{'='*70}\n  MEMORY STATE{f' — {label}' if label else ''}\n{'='*70}"
+    print(header)
+
+    # 1. Short-term memory: conversations
+    print("\n[1] SHORT-TERM MEMORY (ai_ops.conversations)")
+    try:
+        conv = _run_sql(f"""
+            SELECT thread_id, checkpoint_id, created_at,
+                   LEFT(state_json, 200) AS state_preview
+            FROM {CATALOG}.ai_ops.conversations
+            WHERE thread_id = '{thread_id}'
+            ORDER BY created_at DESC LIMIT 5
+        """)
+        if conv["rows"]:
+            for r in conv["rows"]:
+                print(f"  checkpoint={r['checkpoint_id']}  created={r['created_at']}")
+                print(f"    preview: {r['state_preview']}...")
+            print(f"  → {len(conv['rows'])} checkpoint(s) found")
+        else:
+            print("  → No checkpoints found (empty)")
+    except Exception as e:
+        print(f"  → Table not available: {str(e)[:100]}")
+
+    # 2. Long-term memory: user_memory
+    print(f"\n[2] LONG-TERM MEMORY (ai_ops.user_memory)")
+    try:
+        mem = _run_sql(f"""
+            SELECT memory_key, memory_value, memory_type, confidence,
+                   updated_at
+            FROM {CATALOG}.ai_ops.user_memory
+            WHERE user_id = '{user_id}'
+            ORDER BY updated_at DESC
+        """)
+        if mem["rows"]:
+            for r in mem["rows"]:
+                print(f"  {r['memory_key']:25s} = {r['memory_value']:30s}  "
+                      f"(type={r['memory_type']}, conf={r['confidence']})")
+            print(f"  → {len(mem['rows'])} memory entries found")
+        else:
+            print("  → No user memories found (empty)")
+    except Exception as e:
+        print(f"  → Table not available: {str(e)[:100]}")
+
+    # 3. Episodic memory: episodic_memory
+    print(f"\n[3] EPISODIC MEMORY (ai_ops.episodic_memory)")
+    try:
+        ep = _run_sql(f"""
+            SELECT episode_id, question, intent, domain,
+                   agents_used, outcome, lesson_learned, created_at
+            FROM {CATALOG}.ai_ops.episodic_memory
+            WHERE thread_id = '{thread_id}'
+            ORDER BY created_at DESC LIMIT 5
+        """)
+        if ep["rows"]:
+            for r in ep["rows"]:
+                print(f"  episode={r['episode_id']}  intent={r['intent']}  "
+                      f"domain={r['domain']}  outcome={r['outcome']}")
+                print(f"    Q: {r['question'][:80]}")
+                print(f"    agents: {r['agents_used']}  lesson: {r.get('lesson_learned', 'None')}")
+            print(f"  → {len(ep['rows'])} episode(s) found")
+        else:
+            print("  → No episodes found (empty)")
+    except Exception as e:
+        print(f"  → Table not available: {str(e)[:100]}")
+
+    print(f"\n{'='*70}\n")
+
+# Run baseline inspection
+inspect_memory_tables(DEMO_THREAD_ID, DEMO_USER_ID, label="BASELINE (before any requests)")
+
+# COMMAND ---------- [markdown]
+# ### Step 2: First Request — Conversational Message with Personal Facts
+# 
+# This request is intentionally **conversational** — the user introduces themselves with personal details.
+# 
+# Since the intent will be classified as `conversational`/`greeting`, the agent will:
+# - **Save a checkpoint** to `ai_ops.conversations` (short-term memory)
+# - **Extract & save user facts** (name, role, region) to `ai_ops.user_memory` (long-term memory)
+# - **Log the episode** to `ai_ops.episodic_memory` (episodic memory)
+
+# COMMAND ----------
+request_1 = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "Hi, I'm Sarah, a regional claims manager based in Singapore. "
+            "I prefer concise responses and usually focus on the Health and "
+            "Critical Illness product lines."
+        )}
+    ],
+    custom_inputs={
+        "thread_id": DEMO_THREAD_ID,
+        "user_id": DEMO_USER_ID,
+    }
+)
+
+print("Sending Request 1 (conversational with personal facts)...")
+print(f"  thread_id: {DEMO_THREAD_ID}")
+print(f"  user_id:   {DEMO_USER_ID}")
+print(f"  message:   {getattr(request_1.input[0], 'content', '')}\n")
+
+response_1 = agent.predict(request_1)
+
+for item in response_1.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Checkpoint: {metadata.get('checkpoint_id')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ---------- [markdown]
+# ### Step 3: Inspect Memory Tables After First Request
+# 
+# All three memory tables should now be populated:
+# - **Short-term:** 1 checkpoint with the conversation so far
+# - **Long-term:** Extracted facts like `name=Sarah`, `role=regional claims manager`, `preferred_region=Singapore`
+# - **Episodic:** 1 episode logged with `intent=conversational`
+
+# COMMAND ----------
+import time
+time.sleep(3)  # allow async writes to settle
+
+inspect_memory_tables(DEMO_THREAD_ID, DEMO_USER_ID, label="AFTER REQUEST 1 (conversational intro)")
+
+# COMMAND ---------- [markdown]
+# ### Step 4: Second Request — Data Query on Same Thread (Uses Short-Term + Long-Term Memory)
+# 
+# Now we send a **document lookup** question on the **same thread**. The agent will:
+# 
+# 1. **Load the checkpoint** from `ai_ops.conversations` → prepend prior messages for context continuity
+# 2. **Load user memory** from `ai_ops.user_memory` → inject Sarah's preferences into the intent classifier and answer composer
+# 3. Run the RAG pipeline to retrieve policy documents
+# 4. **Save a new checkpoint** with the updated conversation
+# 5. **Log a new episode** to episodic memory
+
+# COMMAND ----------
+request_2 = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "What are the exclusions for the Critical Illness plans?"
+        )}
+    ],
+    custom_inputs={
+        "thread_id": DEMO_THREAD_ID,   # same thread → loads prior conversation
+        "user_id": DEMO_USER_ID,       # same user → loads saved preferences
+    }
+)
+
+print("Sending Request 2 (document lookup on same thread)...")
+print(f"  thread_id: {DEMO_THREAD_ID}  (same thread — will load checkpoint)")
+print(f"  user_id:   {DEMO_USER_ID}    (same user — will load preferences)")
+print(f"  message:   {getattr(request_2.input[0], 'content', '')}\n")
+
+# Invalidate in-process cache so fresh data is loaded from tables
+_memory_cache_ts = 0
+
+response_2 = agent.predict(request_2)
+
+for item in response_2.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Checkpoint: {metadata.get('checkpoint_id')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ----------
+answer = response_2.output[0].content[0]["text"]
+print(answer)
+
+# COMMAND ---------- [markdown]
+# ### Step 5: Inspect Memory Tables After Second Request
+# 
+# Expected changes:
+# - **Short-term:** Now has **2 checkpoints** — the latest includes both the intro and the CI exclusions Q&A
+# - **Long-term:** User memory unchanged (no new personal facts were shared in Request 2)
+# - **Episodic:** Now has **2 episodes** — the new one has `intent=document_lookup`, `domain=documents`
+
+# COMMAND ----------
+time.sleep(3)
+
+inspect_memory_tables(DEMO_THREAD_ID, DEMO_USER_ID, label="AFTER REQUEST 2 (document lookup)")
+
+# Also show what the checkpoint contains to prove multi-turn context
+print("--- Verifying Short-Term Memory Contains Prior Conversation ---")
+checkpoint = _load_checkpoint(DEMO_THREAD_ID)
+if checkpoint and checkpoint.get("messages"):
+    print(f"  Checkpoint has {len(checkpoint['messages'])} messages:")
+    for i, msg in enumerate(checkpoint["messages"]):
+        role = msg.get("role", "?")
+        content = msg.get("content", "")[:100]
+        print(f"    [{i}] {role}: {content}...")
+    print(f"  Stored intent: {checkpoint.get('intent')}")
+    print(f"  Stored domain: {checkpoint.get('domain')}")
+else:
+    print("  No checkpoint found")
+
+# COMMAND ---------- [markdown]
+# ### Step 6: Third Request — Demonstrates All Three Memory Layers Working Together
+# 
+# This request sends a **data/KPI question** on the same thread. The agent will now leverage all memory layers:
+# 
+# 1. **Short-term memory** → loads the 4-message conversation history (intro + CI exclusions + responses)
+# 2. **Long-term memory** → knows Sarah is a claims manager in Singapore who prefers concise responses
+# 3. **Episodic memory** → retrieves lessons from the prior `document_lookup` episode in the documents domain
+# 
+# Notice the response should be **personalized** — the agent may address Sarah by name, keep it concise, and focus on Singapore if relevant.
+
+# COMMAND ----------
+request_3 = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "How do I file a claim under the Critical Illness plans? "
+            "Also, what is the waiting period?"
+        )}
+    ],
+    custom_inputs={
+        "thread_id": DEMO_THREAD_ID,   # same thread → full conversation context
+        "user_id": DEMO_USER_ID,       # same user → personalized response
+    }
+)
+
+print("Sending Request 3 (follow-up using all memory layers)...")
+print(f"  thread_id: {DEMO_THREAD_ID}")
+print(f"  user_id:   {DEMO_USER_ID}")
+print(f"  message:   {getattr(request_3.input[0], 'content', '')}\n")
+
+_memory_cache_ts = 0  # force fresh load from tables
+
+response_3 = agent.predict(request_3)
+
+for item in response_3.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+        print("\n--- Personalization Check ---")
+        answer_lower = text.lower()
+        checks = {
+            "Addressed by name ('Sarah')": "sarah" in answer_lower,
+            "Concise style (< 500 chars)": len(text) < 500,
+            "Mentions Critical Illness": "critical illness" in answer_lower,
+        }
+        for check, passed in checks.items():
+            status = "PASS" if passed else "CHECK"
+            print(f"  [{status}] {check}")
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Checkpoint: {metadata.get('checkpoint_id')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ---------- [markdown]
+# ### Step 7: Final Inspection — Full Memory Lifecycle
+# 
+# After 3 requests, the memory tables should show:
+# 
+# | Table | Expected State |
+# |-------|---------------|
+# | `ai_ops.conversations` | **3 checkpoints** — each with progressively longer message history |
+# | `ai_ops.user_memory` | User facts extracted from Request 1 (name, role, region, product preference) |
+# | `ai_ops.episodic_memory` | **3 episodes** — `conversational` → `document_lookup` → `document_lookup` |
+
+# COMMAND ----------
+time.sleep(3)
+
+inspect_memory_tables(DEMO_THREAD_ID, DEMO_USER_ID, label="FINAL STATE (after 3 requests)")
+
+# Summary counts
+print("\n" + "="*70)
+print("  MEMORY LIFECYCLE SUMMARY")
+print("="*70)
+
+try:
+    conv_count = _run_sql(f"""
+        SELECT COUNT(*) AS cnt FROM {CATALOG}.ai_ops.conversations
+        WHERE thread_id = '{DEMO_THREAD_ID}'
+    """)
+    mem_count = _run_sql(f"""
+        SELECT COUNT(*) AS cnt FROM {CATALOG}.ai_ops.user_memory
+        WHERE user_id = '{DEMO_USER_ID}'
+    """)
+    ep_count = _run_sql(f"""
+        SELECT COUNT(*) AS cnt FROM {CATALOG}.ai_ops.episodic_memory
+        WHERE thread_id = '{DEMO_THREAD_ID}'
+    """)
+
+    c = conv_count["rows"][0]["cnt"] if conv_count["rows"] else 0
+    m = mem_count["rows"][0]["cnt"] if mem_count["rows"] else 0
+    e = ep_count["rows"][0]["cnt"] if ep_count["rows"] else 0
+
+    print(f"""
+  Requests sent:                3
+  ─────────────────────────────────────────────
+  Conversation checkpoints:     {c}  (short-term memory)
+  User memory entries:          {m}  (long-term memory)
+  Episodic memory episodes:     {e}  (episodic memory)
+  ─────────────────────────────────────────────
+
+  How memory was USED in each request:
+
+  Request 1 (conversational intro):
+    → WRITE: checkpoint saved, user facts extracted & saved, episode logged
+    → READ:  none (first interaction)
+
+  Request 2 (CI exclusions query):
+    → WRITE: new checkpoint saved, new episode logged
+    → READ:  checkpoint loaded (prior conversation context),
+             user_memory loaded (preferences injected into intent classifier)
+
+  Request 3 (CI claims & waiting period):
+    → WRITE: new checkpoint saved, new episode logged
+    → READ:  checkpoint loaded (full 4-message history),
+             user_memory loaded (name, role, preferences in answer),
+             episodic_memory loaded (lessons from prior document_lookup)
+""")
+except Exception as e:
+    print(f"  Could not generate summary: {str(e)[:200]}")
+
+# COMMAND ---------- [markdown]
+# ### Cleanup (Optional) — Reset Demo Data
+# 
+# Run this cell to remove all demo data from the memory tables so the demo can be re-run from scratch.
+
+# COMMAND ----------
+# Uncomment and run to clean up demo data:
+
+# _run_sql(f"DELETE FROM {CATALOG}.ai_ops.conversations WHERE thread_id = '{DEMO_THREAD_ID}'")
+# _run_sql(f"DELETE FROM {CATALOG}.ai_ops.user_memory WHERE user_id = '{DEMO_USER_ID}'")
+# _run_sql(f"DELETE FROM {CATALOG}.ai_ops.episodic_memory WHERE thread_id = '{DEMO_THREAD_ID}'")
+# _memory_cache_ts = 0
+# print("Demo data cleaned up. Ready to re-run.")
+
+# COMMAND ---------- [markdown]
+# ## Multi-Domain Genie Space Routing — Example Queries
+# 
+# Each query below targets a different Genie Space registered in the Context Index.
+# The Supervisor classifies the intent as `simple_kpi`, resolves the best-matching
+# space via Vector Search, and routes to `route_to_genie` which queries that space.
+# 
+# | # | Target Space | Domain | Key Tables |
+# |---|---|---|---|
+# | 1 | Claims Analytics | `claims` | `gold.claims_summary`, `gold.fraud_analysis` |
+# | 2 | Policy & Underwriting | `policies` | `gold.policy_performance`, `silver.enriched_policies` |
+# | 3 | Distribution & Channels | `distribution` | `gold.agent_performance` |
+# | 4 | Customer Analytics | `customers` | `silver.customer_360` |
+
+# COMMAND ---------- [markdown]
+# ### Query 1 — Claims Analytics Space
+# 
+# Routes to the **Claims Analytics** Genie Space (`01f12199fed5107a9d2ccac293b2c0b6`).
+# Semantic match: the question mentions *claims*, *region*, and asks for a *count* — all core concepts in the claims space description.
+
+# COMMAND ----------
+GENIE_THREAD_ID = "genie-routing-demo-thread"
+GENIE_USER_ID = "demo-user-genie"
+
+request_claims = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "What is the total number of claims by region for the last 12 months? "
+            "Also show the average claim processing time by product category."
+        )}
+    ],
+    custom_inputs={
+        "thread_id": GENIE_THREAD_ID,
+        "user_id": GENIE_USER_ID,
+    }
+)
+
+print("Sending Claims Analytics query...")
+print(f"  message: {getattr(request_claims.input[0], 'content', '')}\n")
+
+_memory_cache_ts = 0
+
+response_claims = agent.predict(request_claims)
+
+for item in response_claims.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+        print("\n--- Routing Check ---")
+        answer_lower = text.lower()
+        checks = {
+            "Mentions claims": "claim" in answer_lower,
+            "Mentions region": "region" in answer_lower,
+            "Contains numeric data": any(char.isdigit() for char in text),
+        }
+        for check, passed in checks.items():
+            status = "PASS" if passed else "CHECK"
+            print(f"  [{status}] {check}")
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Domain: {metadata.get('domain')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Genie Space Used: {metadata.get('genie_space_id', 'N/A')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ---------- [markdown]
+# ### Query 2 — Policy & Underwriting Space
+# 
+# Routes to the **Policy & Underwriting** Genie Space (`01f12199ff0a119d989b057bc2a491c3`).
+# Semantic match: the question mentions *premium*, *renewal rate*, and *lapse rate* — core metrics in the policies space description.
+
+# COMMAND ----------
+request_policies = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "What is the total premium volume by distribution channel? "
+            "Show me the policy renewal rate and lapse rate by region for this year."
+        )}
+    ],
+    custom_inputs={
+        "thread_id": GENIE_THREAD_ID,
+        "user_id": GENIE_USER_ID,
+    }
+)
+
+print("Sending Policy & Underwriting query...")
+print(f"  message: {getattr(request_policies.input[0], 'content', '')}\n")
+
+_memory_cache_ts = 0
+
+response_policies = agent.predict(request_policies)
+
+for item in response_policies.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+        print("\n--- Routing Check ---")
+        answer_lower = text.lower()
+        checks = {
+            "Mentions premium": "premium" in answer_lower,
+            "Mentions renewal": "renewal" in answer_lower or "renew" in answer_lower,
+            "Mentions policy": "policy" in answer_lower or "policies" in answer_lower,
+        }
+        for check, passed in checks.items():
+            status = "PASS" if passed else "CHECK"
+            print(f"  [{status}] {check}")
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Domain: {metadata.get('domain')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Genie Space Used: {metadata.get('genie_space_id', 'N/A')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ---------- [markdown]
+# ### Query 3 — Distribution & Channels Space
+# 
+# Routes to the **Distribution & Channels** Genie Space (`01f12199ff2b1aef96fc954dc1de1a06`).
+# Semantic match: the question asks about *top-performing agents*, *channel contribution*, and *commission* — core concepts in the distribution space description.
+
+# COMMAND ----------
+request_distribution = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "Who are the top 10 performing agents by premium collected? "
+            "Also show me channel contribution percentages and commission breakdown for last quarter."
+        )}
+    ],
+    custom_inputs={
+        "thread_id": GENIE_THREAD_ID,
+        "user_id": GENIE_USER_ID,
+    }
+)
+
+print("Sending Distribution & Channels query...")
+print(f"  message: {getattr(request_distribution.input[0], 'content', '')}\n")
+
+_memory_cache_ts = 0
+
+response_distribution = agent.predict(request_distribution)
+
+for item in response_distribution.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+        print("\n--- Routing Check ---")
+        answer_lower = text.lower()
+        checks = {
+            "Mentions agent(s)": "agent" in answer_lower,
+            "Mentions channel": "channel" in answer_lower,
+            "Mentions premium or commission": "premium" in answer_lower or "commission" in answer_lower,
+        }
+        for check, passed in checks.items():
+            status = "PASS" if passed else "CHECK"
+            print(f"  [{status}] {check}")
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Domain: {metadata.get('domain')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Genie Space Used: {metadata.get('genie_space_id', 'N/A')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ---------- [markdown]
+# ### Query 4 — Customer Analytics Space
+# 
+# Routes to the **Customer Analytics** Genie Space (`01f12199ff561a40817162d95a240597`).
+# Semantic match: the question asks about *customer segments*, *retention rate*, and *demographics* — core concepts in the customers space description.
+
+# COMMAND ----------
+request_customers = ResponsesAgentRequest(
+    input=[
+        {"role": "user", "content": (
+            "Which customer segments have the highest claim frequency? "
+            "What is the retention rate by segment and show the demographic breakdown "
+            "of our top-tier customers."
+        )}
+    ],
+    custom_inputs={
+        "thread_id": GENIE_THREAD_ID,
+        "user_id": GENIE_USER_ID,
+    }
+)
+
+print("Sending Customer Analytics query...")
+print(f"  message: {getattr(request_customers.input[0], 'content', '')}\n")
+
+_memory_cache_ts = 0
+
+response_customers = agent.predict(request_customers)
+
+for item in response_customers.output:
+    item_id = getattr(item, "id", "")
+    text = getattr(item, "text", "")
+    if item_id == "msg_answer":
+        print("=== AGENT RESPONSE ===")
+        print(text)
+        print("\n--- Routing Check ---")
+        answer_lower = text.lower()
+        checks = {
+            "Mentions customer": "customer" in answer_lower,
+            "Mentions segment": "segment" in answer_lower,
+            "Mentions retention": "retention" in answer_lower or "retain" in answer_lower,
+        }
+        for check, passed in checks.items():
+            status = "PASS" if passed else "CHECK"
+            print(f"  [{status}] {check}")
+    elif item_id == "msg_metadata" and text.strip():
+        try:
+            metadata = json.loads(text)
+            print(f"\n=== METADATA ===")
+            print(f"  Intent: {metadata.get('intent')}")
+            print(f"  Domain: {metadata.get('domain')}")
+            print(f"  Nodes:  {metadata.get('nodes_executed')}")
+            print(f"  Genie Space Used: {metadata.get('genie_space_id', 'N/A')}")
+        except json.JSONDecodeError:
+            print(f"\n=== METADATA (raw) ===\n  {text[:300]}")
+
+# COMMAND ----------
+
+
+

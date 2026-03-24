@@ -1,10 +1,17 @@
 command:
   - python
   - app.py
+
 env:
-  - name: AGENT_ENDPOINT
-    value: "aia-supervisor-agent"
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: SERVING_ENDPOINT_NAME
+    valueFrom: serving-endpoint
+
 permissions:
   - permission: CAN_QUERY
     resource_type: serving-endpoint
     resource_name: aia-supervisor-agent
+  - permission: CAN_USE
+    resource_type: sql-warehouse
+    resource_name: sql-warehouse

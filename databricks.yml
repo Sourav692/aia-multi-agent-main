@@ -28,15 +28,13 @@ sync:
 resources:
 
   # -------------------------------------------------------------------------
-  # 1. Databricks App – Gradio-based Insurance Intelligence UI
+  # 1. Databricks App – Dash-based AIA Agent 360 Chat UI
   # -------------------------------------------------------------------------
-  # NOTE: App deployment skipped — workspace is at max app limit (300).
-  # Deploy manually: databricks apps deploy aia-insurance-intelligence --source-code-path app/ -p e2-demo_latest
-  # apps:
-  #   aia-insurance-intelligence:
-  #     name: aia-insurance-intelligence
-  #     description: "AIA Insurance Intelligence – multi-agent Gradio application"
-  #     source_code_path: app/
+  apps:
+    aia-agent-360:
+      name: aia-agent-360
+      description: "AIA Agent 360 – Multi-Agent Insurance Intelligence Chat UI (Dash)"
+      source_code_path: app/
 
   # -------------------------------------------------------------------------
   # 2. Model Serving Endpoint – Supervisor Agent

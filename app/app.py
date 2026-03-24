@@ -8,8 +8,8 @@ import dash
 from dash import html, dcc, Input, Output, State, callback, ALL, ctx, no_update
 import dash_bootstrap_components as dbc
 
-AGENT_ENDPOINT = os.getenv("AGENT_ENDPOINT", "aia-supervisor-agent")
-SQL_WAREHOUSE_ID = os.getenv("SQL_WAREHOUSE_ID", "4b9b953939869799")
+AGENT_ENDPOINT = os.getenv("SERVING_ENDPOINT_NAME", "aia-supervisor-agent")
+SQL_WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", "4b9b953939869799")
 CATALOG = "aia_multi_agent_catalog"
 
 app = dash.Dash(
@@ -241,7 +241,7 @@ def _run_sql(sql_statement, max_rows=50):
     """Execute SQL via Databricks SDK Statement Execution API."""
     try:
         from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        w = WorkspaceClient()  # Uses Config() auto-detection internally
         response = w.statement_execution.execute_statement(
             warehouse_id=SQL_WAREHOUSE_ID, statement=sql_statement, wait_timeout="30s",
         )
@@ -383,10 +383,10 @@ def call_agent(question, history, thread_id=None):
     messages = [{"role": h["role"], "content": h["content"]} for h in (history or [])[-6:]]
     messages.append({"role": "user", "content": question})
     try:
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        host = w.config.host.rstrip("/")
-        auth_headers = w.config.authenticate()
+        from databricks.sdk.core import Config
+        cfg = Config()
+        host = cfg.host.rstrip("/")
+        auth_headers = cfg.authenticate()
         payload = {"input": messages}
         custom_inputs = {}
         if thread_id:
