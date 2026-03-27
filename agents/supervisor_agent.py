@@ -33,31 +33,13 @@ CATALOG = "aia_multi_agent_catalog"
 
 import shutil, os
 
-# Copy agent_code.py to /tmp for logging
-source_path = os.path.join(os.path.dirname(os.getcwd()), "aia-multi-agent", "agents", "agent_code.py")
+notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+notebook_dir = os.path.dirname(notebook_path)  # e.g. /Users/.../aia-multi-agent/agents
+agent_source = f"/Workspace{notebook_dir}/agent_code.py"
 
-# The agent code file should be alongside this notebook in the workspace
-# Read it from the workspace files location
 agent_file_path = "/tmp/agent_code.py"
-
-# Read agent_code.py from workspace using the Export API (works for SOURCE notebooks)
-import requests, base64
-TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-HOST  = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
-WS_PATH = "/Users/sourav.banerjee@databricks.com/aia-multi-agent/agents/agent_code"
-
-resp = requests.get(
-    f"{HOST}/api/2.0/workspace/export",
-    headers={"Authorization": f"Bearer {TOKEN}"},
-    params={"path": WS_PATH, "format": "SOURCE", "direct_download": "false"}
-)
-resp.raise_for_status()
-agent_code = base64.b64decode(resp.json()["content"]).decode("utf-8")
-print(f"Read agent_code.py from workspace ({len(agent_code)} chars)")
-
-with open(agent_file_path, "w") as f:
-    f.write(agent_code)
-print(f"Agent code written to {agent_file_path} ({len(agent_code)} chars)")
+shutil.copy(agent_source, agent_file_path)
+print(f"Agent code copied from {agent_source} to {agent_file_path}")
 
 # COMMAND ----------
 
@@ -150,3 +132,38 @@ for q in test_questions:
     print(f"Answer:\n{result['final_answer'][:500]}")
     if result.get("warnings"):
         print(f"Warnings: {result['warnings']}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Create or Update Model Serving Endpoint
+# MAGIC Creates the `aia-supervisor-agent` endpoint if it doesn't exist, otherwise updates it to serve
+# MAGIC the latest registered model version. Uses the Databricks SDK directly — avoids the
+# MAGIC `agents.deploy()` local-store limitation.
+
+# COMMAND ----------
+
+from databricks import agents
+import mlflow
+
+# Get the latest registered version
+client = mlflow.tracking.MlflowClient()
+model_name = f"{CATALOG}.ai_ops.supervisor_agent"
+versions = client.search_model_versions(f"name='{model_name}'")
+latest_version = max(int(v.version) for v in versions)
+print(f"Latest model version: {latest_version}")
+
+# Deploy using agents.deploy() — this creates:
+#   1. Model serving endpoint
+#   2. Review App for human evaluation
+#   3. Inference tables for logging
+#   4. Secure authentication for Databricks resources
+deployment = agents.deploy(
+    model_name,
+    latest_version,
+    scale_to_zero_enabled=True,
+)
+
+print(f"\nEndpoint name: {deployment.endpoint_name}")
+print(f"Query endpoint: {deployment.query_endpoint}")
+print(f"Review App URL: {deployment.review_app_url}")

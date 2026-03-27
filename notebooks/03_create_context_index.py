@@ -27,33 +27,33 @@ assets = [
     # Genie Spaces — one per business domain.
     # asset_id is the Genie Space ID used by the worker agent.
     # ---------------------------------------------------------------------------
-    Row(asset_type="genie_space", asset_id="01f12199fed5107a9d2ccac293b2c0b6",
+    Row(asset_type="genie_space", asset_id="01f1272d4ba6144ba75d868762f1925d",
         display_name="Claims Analytics Space",
         text="Genie Space for claims analytics. Covers claim counts, claim amounts, claim processing times, approval rates, fraud analysis, loss ratios, and suspicious claims. Ask questions about claims by region, product category, claim type, time period, and status.",
         domain="claims",
         endorsement_level="endorsed",
-        metadata=f'{{"type": "genie_space", "space_id": "01f12199fed5107a9d2ccac293b2c0b6", "warehouse_id": "{WH_ID}"}}'),
+        metadata=f'{{"type": "genie_space", "space_id": "01f1272d4ba6144ba75d868762f1925d", "warehouse_id": "{WH_ID}"}}'),
 
-    Row(asset_type="genie_space", asset_id="01f12199ff0a119d989b057bc2a491c3",
+    Row(asset_type="genie_space", asset_id="01f1272d4c6b1fb49223785ab841befd",
         display_name="Policy & Underwriting Space",
         text="Genie Space for policy and underwriting analytics. Covers premium volumes, policy counts, renewal rates, lapse rates, product mix, new business issuance, and underwriting performance. Ask questions about policies by region, product category, distribution channel, and time period.",
         domain="policies",
         endorsement_level="endorsed",
-        metadata=f'{{"type": "genie_space", "space_id": "01f12199ff0a119d989b057bc2a491c3", "warehouse_id": "{WH_ID}"}}'),
+        metadata=f'{{"type": "genie_space", "space_id": "01f1272d4c6b1fb49223785ab841befd", "warehouse_id": "{WH_ID}"}}'),
 
-    Row(asset_type="genie_space", asset_id="01f12199ff2b1aef96fc954dc1de1a06",
+    Row(asset_type="genie_space", asset_id="01f1272d4d271203ad122e9280470248",
         display_name="Distribution & Channels Space",
         text="Genie Space for distribution and channel analytics. Covers agent productivity, sales pipeline, channel contribution percentages, commission analysis, partner network performance, and agent rankings. Ask questions about agent performance, distribution channels, and partner metrics.",
         domain="distribution",
         endorsement_level="endorsed",
-        metadata=f'{{"type": "genie_space", "space_id": "01f12199ff2b1aef96fc954dc1de1a06", "warehouse_id": "{WH_ID}"}}'),
+        metadata=f'{{"type": "genie_space", "space_id": "01f1272d4d271203ad122e9280470248", "warehouse_id": "{WH_ID}"}}'),
 
-    Row(asset_type="genie_space", asset_id="01f12199ff561a40817162d95a240597",
+    Row(asset_type="genie_space", asset_id="01f1272d4de1188cac8feeb7e71bdb69",
         display_name="Customer Analytics Space",
         text="Genie Space for customer analytics. Covers customer segmentation, retention rates, claim frequency by segment, customer lifetime value, demographic analysis, and customer 360 views. Ask questions about customer segments, demographics, retention, and customer behavior.",
         domain="customers",
         endorsement_level="endorsed",
-        metadata=f'{{"type": "genie_space", "space_id": "01f12199ff561a40817162d95a240597", "warehouse_id": "{WH_ID}"}}'),
+        metadata=f'{{"type": "genie_space", "space_id": "01f1272d4de1188cac8feeb7e71bdb69", "warehouse_id": "{WH_ID}"}}'),
 
     # ---------------------------------------------------------------------------
     # Document Indexes — metadata.vs_index tells the Multi-Tool agent which VS

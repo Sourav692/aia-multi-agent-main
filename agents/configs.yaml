@@ -18,7 +18,7 @@ agent_configs:
     endpoint_name: "databricks-claude-3-7-sonnet"
     temperature: 0.1  # Lower temperature for more consistent supervisor routing
   genie_agent:
-    space_id: 01f0d6ff25da1f229950bb97c1ec974c
+    space_id: 01f1272d4ba6144ba75d868762f1925d
     description: | 
       This genie agent analyzes digital customer journeys and KPI performance across Personal Loans, Business Loans, Home Loans, and Gold Loans products. 
       It tracks user progression through awareness, interest, consideration, and conversion stages across organic and inorganic channels.
