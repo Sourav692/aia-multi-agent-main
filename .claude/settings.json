@@ -1,7 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(.venv/bin/python -c \"import ast, json:*)",
+      "Bash(.venv/bin/jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.kernel_name=python3 agents/agent_code.ipynb)",
+      "Bash(.venv/bin/pip show nbconvert)",
+      "Bash(.venv/bin/pip install nbconvert -q)",
+      "Bash(jupyter --version)",
+      "Bash(.venv/bin/jupyter run --help)",
+      "Bash(.venv/bin/python -:*)",
+      "Bash(timeout 300 .venv/bin/python /tmp/agent_code_extracted.py)",
+      "Bash(.venv/bin/python /tmp/agent_code_extracted.py)"
     ]
   }
 }
