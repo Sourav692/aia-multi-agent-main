@@ -40,8 +40,8 @@ resources:
   # 2. Model Serving Endpoint – Supervisor Agent
   # -------------------------------------------------------------------------
   serving_endpoints:
-    aia-supervisor-agent:
-      name: aia-supervisor-agent
+    agents_aia_multi_agent_catalog-ai_ops-supervisor_agent:
+      name: agents_aia_multi_agent_catalog-ai_ops-supervisor_agent
       config:
         served_entities:
           - entity_name: aia_multi_agent_catalog.ai_ops.supervisor_agent

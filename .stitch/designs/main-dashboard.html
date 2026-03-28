@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AIA Agent 360 - Enterprise Multi-Agent System</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "secondary-container": "#3131c0",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "on-secondary": "#1000a9",
+                        "primary-container": "#c0392b",
+                        "inverse-on-surface": "#283044",
+                        "surface-container-lowest": "#060e20",
+                        "on-surface": "#dae2fd",
+                        "outline": "#a88a85",
+                        "primary": "#ffb4a9",
+                        "surface-container-highest": "#2d3449",
+                        "tertiary-fixed": "#85f8c4",
+                        "surface-variant": "#2d3449",
+                        "on-error": "#690005",
+                        "tertiary": "#68dba9",
+                        "on-tertiary-fixed": "#002114",
+                        "tertiary-fixed-dim": "#68dba9",
+                        "surface-dim": "#0b1326",
+                        "surface-tint": "#ffb4a9",
+                        "secondary": "#c0c1ff",
+                        "on-secondary-fixed-variant": "#2f2ebe",
+                        "on-error-container": "#ffdad6",
+                        "on-secondary-fixed": "#07006c",
+                        "surface-container-low": "#131b2e",
+                        "on-background": "#dae2fd",
+                        "on-tertiary": "#003825",
+                        "error": "#ffb4ab",
+                        "surface-bright": "#31394d",
+                        "inverse-surface": "#dae2fd",
+                        "on-primary-container": "#ffe5e1",
+                        "primary-fixed": "#ffdad5",
+                        "surface": "#0b1326",
+                        "background": "#0b1326",
+                        "tertiary-container": "#007954",
+                        "on-primary-fixed": "#410000",
+                        "on-primary-fixed-variant": "#8e130c",
+                        "surface-container": "#171f33",
+                        "surface-container-high": "#222a3d",
+                        "on-surface-variant": "#e1bfb9",
+                        "on-secondary-container": "#b0b2ff",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "secondary-fixed": "#e1e0ff",
+                        "outline-variant": "#59413d",
+                        "primary-fixed-dim": "#ffb4a9",
+                        "on-primary": "#690001",
+                        "error-container": "#93000a",
+                        "inverse-primary": "#b02d21",
+                        "on-tertiary-container": "#9affce"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body selection:bg-primary/30">
+<!-- Top Header Bar -->
+<header class="fixed top-0 w-full h-[48px] z-50 bg-[#0b1326] dark:bg-[#0b1326] flex items-center justify-between px-6 w-full shadow-none border-none">
+<div class="flex items-center gap-3">
+<div class="bg-primary-container text-white w-8 h-8 flex items-center justify-center font-black rounded-sm">AIA</div>
+<h1 class="text-lg font-bold tracking-tighter text-white uppercase font-headline">AIA Agent 360</h1>
+</div>
+<div class="hidden md:flex items-center gap-2">
+<div class="flex items-center gap-2 bg-tertiary-container/20 border border-tertiary-container/30 px-3 py-1 rounded-full">
+<span class="w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-tertiary">Genie</span>
+</div>
+<div class="flex items-center gap-2 bg-secondary-container/20 border border-secondary-container/30 px-3 py-1 rounded-full">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-secondary">Multi-Tool</span>
+</div>
+<div class="flex items-center gap-2 bg-amber-500/20 border border-amber-500/30 px-3 py-1 rounded-full">
+<span class="w-2 h-2 rounded-full bg-amber-500"></span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-amber-500">Analysis</span>
+</div>
+<div class="flex items-center gap-2 bg-primary-container/20 border border-primary-container/30 px-3 py-1 rounded-full">
+<span class="w-2 h-2 rounded-full bg-primary-container"></span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-primary-container">Visualization</span>
+</div>
+<div class="ml-4 flex items-center gap-3 border-l border-outline-variant/20 pl-4">
+<span class="material-symbols-outlined text-on-surface-variant hover:text-white cursor-pointer transition-colors" data-icon="hub">hub</span>
+<span class="material-symbols-outlined text-on-surface-variant hover:text-white cursor-pointer transition-colors" data-icon="analytics">analytics</span>
+<span class="material-symbols-outlined text-on-surface-variant hover:text-white cursor-pointer transition-colors" data-icon="visibility">visibility</span>
+<span class="material-symbols-outlined text-on-surface-variant hover:text-white cursor-pointer transition-colors" data-icon="auto_awesome">auto_awesome</span>
+</div>
+</div>
+</header>
+<div class="flex pt-[48px] h-screen overflow-hidden">
+<!-- Left Sidebar -->
+<aside class="fixed left-0 top-[48px] w-[240px] h-[calc(100vh-48px)] z-40 bg-[#131b2e] dark:bg-[#131b2e] flex flex-col border-none font-['Inter'] text-[13px] leading-relaxed">
+<div class="p-4 flex items-center justify-between">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Conversations</span>
+<button class="w-6 h-6 rounded bg-primary-container text-white flex items-center justify-center hover:opacity-90 transition-all active:scale-95">
+<span class="material-symbols-outlined text-sm" data-icon="add">add</span>
+</button>
+</div>
+<nav class="flex-1 overflow-y-auto scrollbar-hide px-2 space-y-1">
+<div class="flex items-center gap-3 px-4 py-3 text-white bg-[#2d3449] border-r-2 border-[#c0392b] cursor-pointer group">
+<span class="material-symbols-outlined text-[18px] text-[#ffb4a9]" data-icon="chat_bubble">chat_bubble</span>
+<div class="flex flex-col overflow-hidden">
+<span class="truncate font-medium">Claims Analysis Q3</span>
+<span class="text-[10px] text-on-surface-variant/60">Just now</span>
+</div>
+</div>
+<div class="flex items-center gap-3 px-4 py-3 text-[#59413d] hover:text-white hover:bg-[#2d3449] transition-all cursor-pointer group">
+<span class="material-symbols-outlined text-[18px]" data-icon="history">history</span>
+<div class="flex flex-col overflow-hidden">
+<span class="truncate">Policy Risk Assessment</span>
+<span class="text-[10px] text-on-surface-variant/40">2 hours ago</span>
+</div>
+</div>
+<div class="flex items-center gap-3 px-4 py-3 text-[#59413d] hover:text-white hover:bg-[#2d3449] transition-all cursor-pointer group">
+<span class="material-symbols-outlined text-[18px]" data-icon="history">history</span>
+<div class="flex flex-col overflow-hidden">
+<span class="truncate">Fraud Detection Report</span>
+<span class="text-[10px] text-on-surface-variant/40">Yesterday</span>
+</div>
+</div>
+</nav>
+<div class="p-4 border-t border-outline-variant/10">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant block mb-4">Quick Start</span>
+<div class="space-y-3">
+<button class="text-left text-primary-container hover:text-primary transition-colors text-[12px] leading-tight block">What is the total number of claims by region?</button>
+<button class="text-left text-primary-container hover:text-primary transition-colors text-[12px] leading-tight block">Which product categories have highest fraud scores?</button>
+<button class="text-left text-primary-container hover:text-primary transition-colors text-[12px] leading-tight block">Projected coverage gap for 2024</button>
+<button class="text-left text-primary-container hover:text-primary transition-colors text-[12px] leading-tight block">Top performing policy adjusters</button>
+<button class="text-left text-primary-container hover:text-primary transition-colors text-[12px] leading-tight block">Agent response time trends</button>
+<button class="text-left text-primary-container hover:text-primary transition-colors text-[12px] leading-tight block">Renewal rates by demographic</button>
+</div>
+</div>
+<div class="mt-auto p-4 flex flex-col gap-2">
+<div class="flex items-center gap-3 px-4 py-3 text-[#59413d] hover:text-white hover:bg-[#2d3449] transition-all cursor-pointer rounded-xl">
+<span class="material-symbols-outlined text-[18px]" data-icon="settings">settings</span>
+<span>Settings</span>
+</div>
+</div>
+</aside>
+<!-- Center Chat Area -->
+<main class="flex-1 ml-[240px] mr-[280px] bg-surface-container-lowest relative flex flex-col overflow-hidden">
+<!-- Canvas Gradient background -->
+<div class="absolute inset-0 opacity-10 pointer-events-none" style="background: radial-gradient(circle at 50% 50%, #c0392b 0%, transparent 70%);"></div>
+<!-- Chat Content -->
+<div class="flex-1 overflow-y-auto p-8 space-y-8 relative scrollbar-hide">
+<!-- Welcome Message -->
+<div class="max-w-3xl mx-auto text-center py-12">
+<h2 class="text-4xl font-extrabold tracking-tight text-white mb-2 font-headline">Welcome to AIA Agent 360</h2>
+<p class="text-on-surface-variant text-lg">Ask me anything about claims, policies, agents, or coverage.</p>
+</div>
+<!-- User Message -->
+<div class="flex justify-end max-w-4xl mx-auto w-full">
+<div class="bg-primary-container text-white px-6 py-4 rounded-2xl rounded-tr-sm shadow-xl max-w-[80%]">
+<p class="text-[15px]">What is the total number of claims by region?</p>
+</div>
+</div>
+<!-- Thinking Panel -->
+<div class="max-w-4xl mx-auto w-full">
+<div class="bg-surface-container-high/50 backdrop-blur-md border border-outline-variant/10 rounded-xl overflow-hidden shadow-2xl">
+<div class="px-4 py-2 bg-surface-container-highest/50 flex items-center gap-2 border-b border-outline-variant/5">
+<span class="w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-tertiary">Agent Intelligence Workflow</span>
+</div>
+<div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-tertiary text-sm" data-icon="check_circle" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<div class="flex flex-col">
+<span class="text-[11px] font-bold text-white">Classify Intent</span>
+<span class="text-[10px] text-on-surface-variant">simple_kpi (95% confidence)</span>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-tertiary text-sm" data-icon="check_circle" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<div class="flex flex-col">
+<span class="text-[11px] font-bold text-white">Resolve Assets</span>
+<span class="text-[10px] text-on-surface-variant">domain: claims · genie: insurance_kpi</span>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-tertiary text-sm" data-icon="check_circle" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<div class="flex flex-col">
+<span class="text-[11px] font-bold text-white">Genie Agent</span>
+<span class="text-[10px] text-on-surface-variant">Data Fetched: 5 rows retrieved</span>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-tertiary text-sm" data-icon="check_circle" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<div class="flex flex-col">
+<span class="text-[11px] font-bold text-white">Compose Answer</span>
+<span class="text-[10px] text-on-surface-variant">Status: Done</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- AI Response Message -->
+<div class="flex justify-start max-w-4xl mx-auto w-full">
+<div class="bg-surface-container-highest text-on-surface px-8 py-6 rounded-2xl rounded-tl-sm shadow-2xl w-full border border-outline-variant/10">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-8 h-8 rounded-full bg-gradient-to-br from-tertiary to-tertiary-container flex items-center justify-center">
+<span class="material-symbols-outlined text-on-tertiary text-lg" data-icon="smart_toy" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+</div>
+<span class="font-bold text-white">Agent Genie</span>
+</div>
+<p class="mb-6 leading-relaxed">Based on the current quarterly data, here is the breakdown of insurance claims by geographic region:</p>
+<div class="overflow-hidden rounded-xl border border-outline-variant/10 bg-surface-container-low">
+<table class="w-full text-left text-[13px]">
+<thead>
+<tr class="bg-surface-container-high">
+<th class="px-4 py-3 font-bold text-white uppercase tracking-wider text-[10px]">Region</th>
+<th class="px-4 py-3 font-bold text-white uppercase tracking-wider text-[10px]">Total Claims</th>
+<th class="px-4 py-3 font-bold text-white uppercase tracking-wider text-[10px]">Avg Value</th>
+<th class="px-4 py-3 font-bold text-white uppercase tracking-wider text-[10px]">Trend</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/5">
+<tr class="hover:bg-surface-container-highest/30 transition-colors">
+<td class="px-4 py-3">North America</td>
+<td class="px-4 py-3 font-medium">12,450</td>
+<td class="px-4 py-3">$4,200</td>
+<td class="px-4 py-3 text-tertiary">↑ 4.2%</td>
+</tr>
+<tr class="hover:bg-surface-container-highest/30 transition-colors">
+<td class="px-4 py-3">Europe</td>
+<td class="px-4 py-3 font-medium">8,120</td>
+<td class="px-4 py-3">$5,150</td>
+<td class="px-4 py-3 text-primary">↓ 1.8%</td>
+</tr>
+<tr class="hover:bg-surface-container-highest/30 transition-colors">
+<td class="px-4 py-3">Asia Pacific</td>
+<td class="px-4 py-3 font-medium">15,890</td>
+<td class="px-4 py-3">$2,900</td>
+<td class="px-4 py-3 text-tertiary">↑ 12.5%</td>
+</tr>
+<tr class="hover:bg-surface-container-highest/30 transition-colors">
+<td class="px-4 py-3">Latin America</td>
+<td class="px-4 py-3 font-medium">3,440</td>
+<td class="px-4 py-3">$3,800</td>
+<td class="px-4 py-3 text-on-surface-variant">—</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- Chat Input -->
+<div class="p-6 bg-surface-container-low border-t border-outline-variant/10">
+<div class="max-w-4xl mx-auto relative group">
+<div class="absolute -inset-0.5 bg-gradient-to-r from-primary-container/20 to-secondary-container/20 rounded-2xl blur opacity-30 group-focus-within:opacity-100 transition duration-500"></div>
+<div class="relative bg-surface-container-highest/80 backdrop-blur-xl border border-outline-variant/20 rounded-2xl flex items-center p-1 shadow-2xl">
+<button class="p-3 text-on-surface-variant hover:text-white transition-colors">
+<span class="material-symbols-outlined" data-icon="attach_file">attach_file</span>
+</button>
+<input class="flex-1 bg-transparent border-none focus:ring-0 text-on-surface placeholder-on-surface-variant/50 px-2 py-3 text-[15px]" placeholder="Ask a question..." type="text"/>
+<div class="flex items-center gap-2 pr-2">
+<button class="p-3 text-on-surface-variant hover:text-white transition-colors">
+<span class="material-symbols-outlined" data-icon="mic">mic</span>
+</button>
+<button class="bg-primary-container text-white w-10 h-10 rounded-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-lg">
+<span class="material-symbols-outlined" data-icon="north">north</span>
+</button>
+</div>
+</div>
+</div>
+<p class="text-center text-[10px] text-on-surface-variant mt-3 uppercase tracking-widest opacity-50">Enterprise Intelligence V2.4 • Secure Environment</p>
+</div>
+</main>
+<!-- Right Warnings Panel -->
+<aside class="fixed right-0 top-[48px] w-[280px] h-[calc(100vh-48px)] z-40 bg-surface-container-low p-6 flex flex-col border-none">
+<div class="flex items-center justify-between mb-6">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Warnings</span>
+<span class="bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded text-[10px] font-bold">2 ACTIVE</span>
+</div>
+<div class="space-y-4">
+<div class="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl space-y-2 relative overflow-hidden group hover:bg-amber-500/20 transition-all cursor-pointer">
+<div class="absolute top-0 right-0 p-2 opacity-20">
+<span class="material-symbols-outlined text-amber-500" data-icon="warning">warning</span>
+</div>
+<h4 class="text-amber-500 text-[11px] font-bold uppercase tracking-tight">Anomalous Volume</h4>
+<p class="text-[12px] leading-relaxed text-on-surface">Spike in APAC travel claims detected (+45% above seasonal baseline).</p>
+<div class="flex items-center gap-2 pt-1">
+<span class="text-[10px] font-medium text-amber-500/70">Source: Risk Engine</span>
+</div>
+</div>
+<div class="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl space-y-2 relative overflow-hidden group hover:bg-amber-500/20 transition-all cursor-pointer">
+<div class="absolute top-0 right-0 p-2 opacity-20">
+<span class="material-symbols-outlined text-amber-500" data-icon="report_problem">report_problem</span>
+</div>
+<h4 class="text-amber-500 text-[11px] font-bold uppercase tracking-tight">Compliance Alert</h4>
+<p class="text-[12px] leading-relaxed text-on-surface">Modified coverage rules for EU-GDPR not yet applied to visualization agent.</p>
+</div>
+</div>
+<!-- Placeholder for state change -->
+<div class="hidden flex-1 flex flex-col items-center justify-center opacity-30 text-center">
+<span class="material-symbols-outlined text-4xl mb-2" data-icon="shield_check">shield</span>
+<p class="text-[12px] font-medium">No warnings</p>
+</div>
+<div class="mt-auto space-y-4">
+<div class="bg-surface-container-high p-4 rounded-xl">
+<div class="flex items-center gap-3 mb-3">
+<img alt="Professional insurance agent profile" class="w-10 h-10 rounded-full object-cover border border-outline-variant/20" data-alt="Close-up portrait of a professional corporate executive in a dark suit with a neutral professional background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBtfWlfmg8M4XspjSjXLwrmibkFJAVJomfmFa06RnDCxIiiXykyYlljFLJ9aizdWxvnCPWj87Dh8kH6G6jqxL5xIJI9F0qVElBMW7SsbA6N0VQai0zHYKaqxjoOXBSex5lUtDzTEHys0ffuCutLJgTinvKczoj7x1swo3EiCsY08X9uIIyYd4paCZ11dt_gU5onPOh6VeFmlIIjNyjOefJ6FfwGiR8zcAaSx_Wa1VsfSd5mlUAw-gMqblENlMg1vcufI3bV3vWwceU-"/>
+<div class="flex flex-col">
+<span class="text-[13px] font-bold text-white">David Chen</span>
+<span class="text-[10px] text-on-surface-variant uppercase tracking-widest">Senior Underwriter</span>
+</div>
+</div>
+<button class="w-full bg-surface-container-highest hover:bg-surface-bright text-white text-[11px] font-bold uppercase py-2 rounded-lg transition-colors tracking-widest">
+                        View Profile
+                    </button>
+</div>
+</div>
+</aside>
+</div>
+</body></html>

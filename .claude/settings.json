@@ -13,7 +13,9 @@
       "Bash(.venv/bin/python /tmp/agent_code_extracted.py)",
       "mcp__databricks__get_best_cluster",
       "mcp__databricks__get_cluster_status",
-      "mcp__databricks__run_python_file_on_databricks"
+      "mcp__databricks__run_python_file_on_databricks",
+      "mcp__databricks__get_genie",
+      "mcp__databricks__ask_genie"
     ]
   }
 }

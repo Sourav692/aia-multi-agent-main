@@ -11,7 +11,7 @@ env:
 permissions:
   - permission: CAN_QUERY
     resource_type: serving-endpoint
-    resource_name: aia-supervisor-agent
+    resource_name: agents_aia_multi_agent_catalog-ai_ops-supervisor_agent
   - permission: CAN_USE
     resource_type: sql-warehouse
     resource_name: sql-warehouse

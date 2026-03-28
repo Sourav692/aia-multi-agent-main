@@ -701,13 +701,47 @@ def classify_intent(state):
             except Exception as e:
                 state["warnings"].append(f"Follow-up resolution failed: {str(e)[:100]}")
 
+    # ── Context-synthesis heuristic ──────────────────────────────────────
+    # When the conversation already contains data-bearing assistant answers
+    # AND the current question asks for comparisons / insights / synthesis
+    # from those prior results, classify as conversational immediately so
+    # the LLM answers from conversation history (no agent round-trip).
+    if len(messages) > 2:
+        _ctx_ref_signals = [
+            "based on those", "based on the above", "from those results",
+            "from our previous", "from our conversation", "compare those",
+            "compare the above", "looking at both", "considering both",
+            "given those", "given the above", "from what we discussed",
+            "those two results", "previous results", "earlier results",
+            "what we\'ve seen", "what can we conclude", "summarize our",
+            "insights from", "combine those", "cross-reference",
+            "based on those two", "from the data above", "earlier data",
+            "from all of our previous", "from our earlier", "deduce from",
+        ]
+        _has_prior_data = any(
+            m.get("role") == "assistant" and len(m.get("content", "")) > 100
+            for m in messages[:-1]
+        )
+        if _has_prior_data and any(sig in question.lower() for sig in _ctx_ref_signals):
+            state["intent"] = "conversational"
+            state["intent_confidence"] = 0.95
+            state["needs_clarification"] = False
+            state["warnings"].append("Context synthesis: answering from conversation history")
+            return state
+    # ────────────────────────────────────────────────────────────────────
+
     fallback_prompt = """You are an intent classifier for an insurance analytics system.
 Classify the following question into exactly ONE category and provide a confidence score (0.0 to 1.0).
 
 Categories:
-- "simple_kpi": Simple KPI/metric questions (counts, totals, averages, trends by region/product/time)
+- "simple_kpi": Simple KPI/metric questions that require NEW data retrieval (counts, totals, averages, trends by region/product/time)
 - "document_lookup": Policy terms, coverage details, exclusions, procedures, document search
-- "conversational": Greetings, introductions, personal statements, small talk, or non-analytical messages
+- "conversational": Greetings, introductions, personal statements, small talk, non-analytical messages, OR questions that ask for comparisons, insights, cross-analysis, or synthesis based on information already provided in the conversation history (e.g., "based on those results", "compare the above", "what can we conclude from our discussion", "looking at both sets of data")
+
+IMPORTANT: If the user is referencing data or results from earlier in the conversation and asking for analysis, comparison, or insights from that existing information, classify as "conversational" — the system can answer from conversation context without querying new data.
+
+Conversation history:
+{history}
 
 Question: {question}
 
@@ -723,11 +757,20 @@ If the question is ambiguous or missing key filters (like region, time period, p
         prefs = "; ".join([f"{k}={v}" for k, v in user_mem.items()])
         memory_context = f"\nUser preferences: {prefs}"
 
+    # Build conversation history summary for the classifier
+    _history_lines = []
+    for m in messages[:-1]:
+        _role = m.get("role", "user")
+        _content = m.get("content", "")[:300]
+        if _role in ("user", "assistant") and _content:
+            _history_lines.append(f"{_role}: {_content}")
+    _history_text = "\n".join(_history_lines[-6:]) if _history_lines else "No prior conversation."
+
     prompt_template = _get_prompt("supervisor", "classify_intent", fallback_prompt)
     try:
-        prompt = prompt_template.format(question=question)
+        prompt = prompt_template.format(question=question, history=_history_text)
     except (KeyError, IndexError):
-        prompt = fallback_prompt.replace("{question}", question)
+        prompt = fallback_prompt.replace("{question}", question).replace("{history}", _history_text)
     prompt += memory_context
 
     response = llm.invoke([HumanMessage(content=prompt)])
@@ -764,6 +807,7 @@ If the question is ambiguous or missing key filters (like region, time period, p
         state["_missing_filters"] = missing_filters
 
     return state
+
 
 # COMMAND ---------- [markdown]
 # ## Node 2: Clarify or Disambiguate
@@ -985,6 +1029,22 @@ def _record_asset_feedback(agent_name, domain, feedback_type, details, state):
 
 # COMMAND ----------
 
+def _get_genie_client():
+    """Return a WorkspaceClient configured for Genie API calls.
+
+    In Model Serving, uses on-behalf-of (OBO) user credentials so that
+    Genie queries execute under the calling user's identity — inheriting
+    their UC table permissions automatically. No manual SP grants needed.
+    Falls back to default credentials (user PAT) in notebooks.
+    """
+    from databricks.sdk import WorkspaceClient
+    try:
+        from databricks_ai_bridge import ModelServingUserCredentials
+        return WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
+    except Exception:
+        return WorkspaceClient()
+
+
 def _query_genie_space(w, space_id, question):
     """Call the Genie API for a single space and return a result dict."""
     try:
@@ -1020,7 +1080,6 @@ def _query_genie_space(w, space_id, question):
 
 @mlflow.trace(name="route_to_genie", span_type=SpanType.TOOL)
 def route_to_genie(state):
-    from databricks.sdk import WorkspaceClient
     question = state["user_question"]
 
     # Inject schema hints from successful past queries into the Genie question
@@ -1032,7 +1091,9 @@ def route_to_genie(state):
     if _hints:
         question = question + "\n[Schema hints from past queries: " + " | ".join(_hints[:2]) + "]"
 
-    w = WorkspaceClient()
+    # OBO auth: in Model Serving, Genie calls run as the calling user
+    # (inherits their UC table permissions). No manual SP grants needed.
+    w = _get_genie_client()
 
     genie_spaces = state.get("resolved_assets", {}).get("genie_spaces", [])
     if not genie_spaces:
@@ -1167,6 +1228,25 @@ def compose_answer(state):
         doc_text = "\n".join([f"- {d['title']}: {d['content'][:200]}..." for d in multi_tool["docs"][:3]])
         context_parts.append(f"**Documents:**\n{doc_text}")
 
+    # ── Conversation history injection ───────────────────────────────
+    # When no agent results are available (e.g. context-synthesis questions
+    # classified as conversational), inject prior conversation Q&A so the
+    # LLM can answer from history rather than saying "no data available".
+    if not context_parts:
+        _msgs = state.get("messages", [])
+        _history_pairs = []
+        for m in _msgs[:-1]:  # exclude the current question
+            _role = m.get("role", "")
+            _content = m.get("content", "")
+            if _role in ("user", "assistant") and _content:
+                _history_pairs.append(f"**{_role.title()}:** {_content[:800]}")
+        if _history_pairs:
+            context_parts.append(
+                "**Conversation History (use this data to answer):**\n"
+                + "\n\n".join(_history_pairs)
+            )
+    # ────────────────────────────────────────────────────────────────────
+
     domain = assets.get("domain", "unknown") if assets else "unknown"
     lessons = _get_episodic_lessons(intent, domain)
     if lessons:
@@ -1217,11 +1297,13 @@ Instructions:
 - When the answer warrants detail (trends, analysis, comparisons), provide thorough explanations.
 - For simple KPI questions, keep it brief. For complex analysis, be detailed and insightful.
 - Use markdown when it helps readability (e.g., tables for comparisons, bold for key figures).
-- If you know the user's name from the User preferences section, address them by name naturally.{warning_text}{clarification_text}"""
+- If you know the user's name from the User preferences section, address them by name naturally.
+- If the context includes Conversation History, use the data and numbers from prior answers to synthesize your response. Do not say you lack data \u2014 the prior answers ARE your data source.{warning_text}{clarification_text}"""
 
     response = llm.invoke([HumanMessage(content=compose_prompt)])
     state["final_answer"] = response.content
     return state
+
 
 # COMMAND ---------- [markdown]
 # ## Routing Logic

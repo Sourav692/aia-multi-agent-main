@@ -28,7 +28,7 @@ import numpy as np
 # Configuration
 # ---------------------------------------------------------------------------
 EVAL_DATASET_PATH = os.path.join(os.path.dirname(__file__), "eval_dataset.json")
-SERVING_ENDPOINT_NAME = "aia-supervisor-agent"
+SERVING_ENDPOINT_NAME = "agents_aia_multi_agent_catalog-ai_ops-supervisor_agent"
 DATABRICKS_PROFILE = "e2-demo_latest"
 EXPERIMENT_NAME = "aia-agent-evaluation"
 

@@ -8,7 +8,7 @@ import dash
 from dash import html, dcc, Input, Output, State, callback, ALL, ctx, no_update
 import dash_bootstrap_components as dbc
 
-AGENT_ENDPOINT = os.getenv("SERVING_ENDPOINT_NAME", "aia-supervisor-agent")
+AGENT_ENDPOINT = os.getenv("SERVING_ENDPOINT_NAME", "agents_aia_multi_agent_catalog-ai_ops-supervisor_agent")
 SQL_WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", "4b9b953939869799")
 CATALOG = "aia_multi_agent_catalog"
 
@@ -20,36 +20,41 @@ app = dash.Dash(
 )
 server = app.server
 
-# --- Design Tokens ---
-C_BG = "#f8f9fb"; C_SIDEBAR = "#ffffff"; C_HEADER = "#1a1a2e"
-C_PRIMARY = "#c0392b"; C_PRIMARY_LIGHT = "#fdf2f2"
-C_SURFACE = "#ffffff"; C_BORDER = "#e5e7eb"; C_TEXT = "#1f2937"
-C_MUTED = "#6b7280"; C_SUCCESS = "#059669"; C_WARNING = "#d97706"
-C_DANGER = "#dc2626"; C_PURPLE = "#6366f1"
-C_THINKING_BG = "#f9fafb"; C_THINKING_BORDER = "#e5e7eb"
+# --- Design Tokens (Stitch "Obsidian Architect" dark theme) ---
+C_BG = "#060e20"; C_SIDEBAR = "#131b2e"; C_HEADER = "#0b1326"
+C_PRIMARY = "#c0392b"; C_PRIMARY_LIGHT = "rgba(192,57,43,0.15)"
+C_SURFACE = "#2d3449"; C_BORDER = "rgba(89,65,61,0.15)"; C_TEXT = "#dae2fd"
+C_MUTED = "#94a3b8"; C_SUCCESS = "#68dba9"; C_WARNING = "#d97706"
+C_DANGER = "#dc2626"; C_PURPLE = "#c0c1ff"
+C_THINKING_BG = "#222a3d"; C_THINKING_BORDER = "rgba(89,65,61,0.15)"
+C_SURFACE_MID = "#171f33"; C_SURFACE_HIGH = "#222a3d"; C_SURFACE_TOP = "#2d3449"
 
 USER_BUBBLE = {
     "backgroundColor": C_PRIMARY, "color": "white",
-    "padding": "10px 16px", "borderRadius": "16px 16px 4px 16px",
-    "maxWidth": "70%", "marginLeft": "auto", "marginBottom": "10px",
-    "fontSize": "0.9em", "lineHeight": "1.5", "whiteSpace": "pre-wrap", "wordBreak": "break-word",
+    "padding": "12px 20px", "borderRadius": "16px 16px 4px 16px",
+    "maxWidth": "80%", "marginLeft": "auto", "marginBottom": "10px",
+    "fontSize": "0.9em", "lineHeight": "1.6", "whiteSpace": "pre-wrap", "wordBreak": "break-word",
+    "boxShadow": "0 4px 20px rgba(192,57,43,0.25)",
 }
 AI_BUBBLE = {
-    "backgroundColor": C_SURFACE, "color": C_TEXT,
-    "padding": "12px 16px", "borderRadius": "16px 16px 16px 4px",
+    "backgroundColor": C_SURFACE_TOP, "color": C_TEXT,
+    "padding": "16px 20px", "borderRadius": "16px 16px 16px 4px",
     "maxWidth": "85%", "marginBottom": "10px",
-    "border": f"1px solid {C_BORDER}", "boxShadow": "0 1px 2px rgba(0,0,0,0.05)",
+    "border": f"1px solid {C_BORDER}",
+    "boxShadow": "0 4px 20px rgba(0,0,0,0.3)",
     "lineHeight": "1.6", "fontSize": "0.9em",
 }
 THINKING_STYLE = {
-    "backgroundColor": C_THINKING_BG, "border": f"1px solid {C_THINKING_BORDER}",
-    "borderRadius": "12px", "padding": "10px 14px", "marginBottom": "6px",
+    "backgroundColor": C_SURFACE_HIGH, "border": f"1px solid {C_THINKING_BORDER}",
+    "borderRadius": "12px", "padding": "12px 16px", "marginBottom": "8px",
     "maxWidth": "85%", "fontSize": "0.8em", "color": C_MUTED,
+    "backdropFilter": "blur(12px)",
 }
 HISTORY_ITEM = {
-    "padding": "8px 12px", "borderRadius": "8px", "cursor": "pointer",
-    "marginBottom": "2px", "fontSize": "0.82em",
+    "padding": "10px 14px", "borderRadius": "8px", "cursor": "pointer",
+    "marginBottom": "4px", "fontSize": "0.82em",
     "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+    "transition": "all 0.2s ease",
 }
 
 SAMPLE_QUESTIONS = [
@@ -60,7 +65,7 @@ SAMPLE_QUESTIONS = [
     "Show me a dashboard of claims trends by region",
     "Show me the top 5 agents by premium sold",
 ]
-AGENT_COLORS = {"Genie": C_SUCCESS, "Multi-Tool": C_PURPLE, "Analysis": C_WARNING, "Visualization": C_DANGER}
+AGENT_COLORS = {"Genie": "#007954", "Multi-Tool": "#3131c0", "Analysis": "#d97706", "Visualization": "#c0392b"}
 
 
 def _make_ai_bubble(answer, warnings, clarification, dashboard_urls, msg_offset=0, timestamp=None):
@@ -84,17 +89,17 @@ def _make_ai_bubble(answer, warnings, clarification, dashboard_urls, msg_offset=
     elements.append(html.Div(ai_content, style=AI_BUBBLE))
     if clarification:
         elements.append(html.Div([
-            html.I(className="bi bi-chat-dots", style={"marginRight": "6px", "color": C_PRIMARY, "fontSize": "0.85em"}),
+            html.I(className="bi bi-chat-dots", style={"marginRight": "8px", "color": "#ffb4a9", "fontSize": "0.85em"}),
             html.Span(clarification, style={"fontSize": "0.88em", "color": C_TEXT, "lineHeight": "1.5"}),
-        ], style={"padding": "10px 14px", "backgroundColor": C_PRIMARY_LIGHT, "borderRadius": "12px",
+        ], style={"padding": "12px 16px", "backgroundColor": C_PRIMARY_LIGHT, "borderRadius": "12px",
                   "marginBottom": "8px", "border": f"1px solid {C_BORDER}", "maxWidth": "85%"}))
     for url in (dashboard_urls or []):
         elements.append(html.Div([
-            html.I(className="bi bi-bar-chart-line", style={"marginRight": "6px", "color": C_PRIMARY}),
+            html.I(className="bi bi-bar-chart-line", style={"marginRight": "8px", "color": "#ffb4a9"}),
             html.A("Open AI/BI Dashboard", href=url, target="_blank",
-                   style={"fontWeight": "500", "fontSize": "0.85em", "color": C_PRIMARY}),
-        ], style={"padding": "8px 14px", "backgroundColor": C_PRIMARY_LIGHT, "borderRadius": "8px",
-                  "marginBottom": "8px", "border": f"1px solid {C_PRIMARY}", "maxWidth": "85%"}))
+                   style={"fontWeight": "600", "fontSize": "0.85em", "color": "#ffb4a9"}),
+        ], style={"padding": "10px 16px", "backgroundColor": C_PRIMARY_LIGHT, "borderRadius": "8px",
+                  "marginBottom": "8px", "border": f"1px solid rgba(192,57,43,0.3)", "maxWidth": "85%"}))
     if timestamp:
         elements.append(html.Div(timestamp, style={
             "fontSize": "0.65em", "color": C_MUTED, "marginTop": "2px", "marginBottom": "8px"}))
@@ -103,31 +108,40 @@ def _make_ai_bubble(answer, warnings, clarification, dashboard_urls, msg_offset=
 
 def _badge(name, color):
     return html.Span(name, style={
-        "display": "inline-block", "padding": "1px 6px", "borderRadius": "3px",
-        "backgroundColor": color, "color": "white", "fontSize": "0.65em", "fontWeight": "500", "marginLeft": "4px"})
+        "display": "inline-block", "padding": "2px 8px", "borderRadius": "20px",
+        "backgroundColor": color, "color": "white", "fontSize": "0.6em",
+        "fontWeight": "700", "marginLeft": "4px", "letterSpacing": "0.05em",
+        "textTransform": "uppercase"})
 
 
 def make_welcome():
     return [html.Div([
-        html.P("Welcome to AIA Agent 360", style={"fontSize": "1em", "fontWeight": "600", "margin": "0 0 6px"}),
+        html.P("Welcome to AIA Agent 360",
+               style={"fontSize": "1.4em", "fontWeight": "800", "margin": "0 0 8px",
+                      "color": "white", "letterSpacing": "-0.02em"}),
         html.P("Ask me anything about claims, policies, agents, or coverage.",
-               style={"margin": "0", "fontSize": "0.85em", "color": C_MUTED}),
-    ], style={**AI_BUBBLE, "maxWidth": "90%"})]
+               style={"margin": "0", "fontSize": "0.9em", "color": C_MUTED}),
+    ], style={"textAlign": "center", "padding": "40px 20px", "maxWidth": "100%"})]
 
 
 def make_thinking_block(trace_steps):
     items = [html.Div([
-        html.Span("", style={"width": "5px", "height": "5px", "borderRadius": "50%",
+        html.Span("", style={"width": "6px", "height": "6px", "borderRadius": "50%",
                               "backgroundColor": C_SUCCESS if s.get("ok", True) else C_DANGER,
-                              "display": "inline-block", "marginRight": "6px", "flexShrink": "0", "marginTop": "5px"}),
-        html.Span(s["step"], style={"fontWeight": "500", "marginRight": "6px"}),
-        html.Span(s.get("detail", ""), style={"color": C_MUTED}),
-    ], style={"display": "flex", "alignItems": "flex-start", "marginBottom": "2px"}) for s in trace_steps]
+                              "display": "inline-block", "marginRight": "8px", "flexShrink": "0", "marginTop": "5px",
+                              "boxShadow": f"0 0 6px {C_SUCCESS if s.get('ok', True) else C_DANGER}"}),
+        html.Span(s["step"], style={"fontWeight": "600", "marginRight": "8px", "color": "white", "fontSize": "0.85em"}),
+        html.Span(s.get("detail", ""), style={"color": C_MUTED, "fontSize": "0.8em"}),
+    ], style={"display": "flex", "alignItems": "flex-start", "marginBottom": "4px"}) for s in trace_steps]
     return html.Div([
         html.Div([
-            html.I(className="bi bi-lightbulb", style={"marginRight": "6px", "color": C_WARNING}),
-            html.Span("Thinking...", style={"fontWeight": "500", "color": C_MUTED}),
-        ], style={"marginBottom": "6px", "display": "flex", "alignItems": "center"}),
+            html.Span("", style={"width": "6px", "height": "6px", "borderRadius": "50%",
+                                  "backgroundColor": C_SUCCESS, "display": "inline-block",
+                                  "marginRight": "8px", "animation": "pulse 2s ease-in-out infinite"}),
+            html.Span("AGENT INTELLIGENCE WORKFLOW", style={"fontWeight": "700", "color": C_SUCCESS,
+                                                             "fontSize": "0.65em", "letterSpacing": "0.12em"}),
+        ], style={"marginBottom": "10px", "display": "flex", "alignItems": "center",
+                  "paddingBottom": "8px", "borderBottom": f"1px solid {C_BORDER}"}),
         *items,
     ], style=THINKING_STYLE)
 
@@ -138,9 +152,10 @@ def build_sidebar_list(all_convs, active_id=None):
         c = all_convs[cid]
         is_active = cid == active_id
         style = {**HISTORY_ITEM,
-                 "backgroundColor": C_PRIMARY_LIGHT if is_active else "transparent",
-                 "color": C_PRIMARY if is_active else C_MUTED,
-                 "fontWeight": "500" if is_active else "400"}
+                 "backgroundColor": C_SURFACE_TOP if is_active else "transparent",
+                 "color": "#ffb4a9" if is_active else C_MUTED,
+                 "fontWeight": "500" if is_active else "400",
+                 "borderRight": f"2px solid {C_PRIMARY}" if is_active else "2px solid transparent"}
         children.append(html.Div([
             html.Div(c.get("title", "Untitled"),
                      style={"overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
@@ -155,73 +170,95 @@ def build_sidebar_list(all_convs, active_id=None):
 # -- Layout --
 app.layout = html.Div([
     html.Link(rel="stylesheet", href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"),
+    html.Link(rel="stylesheet", href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"),
 
     # Header
     html.Div([
         html.Div([
-            html.Div(html.Span("AIA", style={"fontWeight": "800", "fontSize": "0.7em", "color": "white",
-                                               "letterSpacing": "0.05em"}),
+            html.Div(html.Span("AIA", style={"fontWeight": "900", "fontSize": "0.65em", "color": "white",
+                                               "letterSpacing": "0.08em"}),
                      style={"display": "inline-flex", "alignItems": "center", "justifyContent": "center",
-                            "width": "32px", "height": "32px", "borderRadius": "6px",
-                            "backgroundColor": C_PRIMARY, "marginRight": "10px"}),
-            html.Span("AIA", style={"fontWeight": "700", "fontSize": "0.95em", "color": "white", "marginRight": "4px"}),
-            html.Span("Agent 360", style={"fontWeight": "400", "fontSize": "0.95em", "color": "rgba(255,255,255,0.7)"}),
+                            "width": "32px", "height": "32px", "borderRadius": "4px",
+                            "backgroundColor": C_PRIMARY, "marginRight": "12px"}),
+            html.Span("AIA", style={"fontWeight": "800", "fontSize": "1em", "color": "white",
+                                     "marginRight": "6px", "letterSpacing": "-0.02em", "textTransform": "uppercase"}),
+            html.Span("AGENT 360", style={"fontWeight": "400", "fontSize": "1em", "color": "rgba(255,255,255,0.5)",
+                                           "letterSpacing": "-0.02em"}),
         ], style={"display": "flex", "alignItems": "center"}),
-        html.Div([_badge(n, c) for n, c in AGENT_COLORS.items()]),
+        html.Div([
+            html.Div([
+                html.Span("", style={"width": "6px", "height": "6px", "borderRadius": "50%",
+                                      "backgroundColor": c, "display": "inline-block", "marginRight": "6px",
+                                      "boxShadow": f"0 0 6px {c}"}),
+                html.Span(n, style={"fontSize": "0.6em", "fontWeight": "700", "color": c,
+                                     "textTransform": "uppercase", "letterSpacing": "0.1em"}),
+            ], style={"display": "flex", "alignItems": "center",
+                      "padding": "3px 10px", "borderRadius": "20px",
+                      "backgroundColor": f"rgba({int(c[1:3],16)},{int(c[3:5],16)},{int(c[5:7],16)},0.12)",
+                      "border": f"1px solid rgba({int(c[1:3],16)},{int(c[3:5],16)},{int(c[5:7],16)},0.25)",
+                      "marginLeft": "6px"})
+            for n, c in AGENT_COLORS.items()
+        ], style={"display": "flex", "alignItems": "center"}),
     ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
-              "padding": "10px 20px", "backgroundColor": C_HEADER, "height": "48px"}),
+              "padding": "10px 24px", "backgroundColor": C_HEADER, "height": "48px"}),
 
     dbc.Row([
         # Sidebar
         dbc.Col(html.Div([
             html.Div([
-                html.Span("Conversations", style={"fontSize": "0.72em", "fontWeight": "600", "color": C_MUTED,
-                                                    "textTransform": "uppercase", "letterSpacing": "0.05em"}),
-                dbc.Button("+", id="new-chat-btn", color="danger", size="sm", n_clicks=0,
-                           style={"borderRadius": "6px", "padding": "1px 8px", "fontSize": "0.85em", "lineHeight": "1"}),
-            ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "10px"}),
+                html.Span("Conversations", style={"fontSize": "0.65em", "fontWeight": "700", "color": C_MUTED,
+                                                    "textTransform": "uppercase", "letterSpacing": "0.12em"}),
+                dbc.Button("+", id="new-chat-btn", size="sm", n_clicks=0,
+                           style={"borderRadius": "4px", "padding": "1px 8px", "fontSize": "0.85em",
+                                  "lineHeight": "1", "backgroundColor": C_PRIMARY, "border": "none",
+                                  "color": "white"}),
+            ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "12px"}),
             html.Div(id="conversation-list", children=[
                 html.P("No conversations yet",
                        style={"color": C_MUTED, "fontSize": "0.82em", "textAlign": "center", "marginTop": "16px"})],
                      style={"flex": "1", "overflowY": "auto"}),
             html.Div([
-                html.Div("Quick start", style={"fontSize": "0.68em", "fontWeight": "600", "color": C_MUTED,
-                                                "textTransform": "uppercase", "letterSpacing": "0.05em", "marginBottom": "4px"}),
+                html.Div("Quick start", style={"fontSize": "0.62em", "fontWeight": "700", "color": C_MUTED,
+                                                "textTransform": "uppercase", "letterSpacing": "0.12em", "marginBottom": "8px"}),
                 *[html.Div(q, id={"type": "sample-q", "index": i}, n_clicks=0,
-                           style={"fontSize": "0.76em", "color": C_PRIMARY, "cursor": "pointer",
-                                  "padding": "3px 0", "lineHeight": "1.3"})
+                           style={"fontSize": "0.75em", "color": "#ffb4a9", "cursor": "pointer",
+                                  "padding": "4px 0", "lineHeight": "1.4",
+                                  "transition": "color 0.2s ease"})
                   for i, q in enumerate(SAMPLE_QUESTIONS)],
-            ], style={"borderTop": f"1px solid {C_BORDER}", "paddingTop": "10px"}),
+            ], style={"borderTop": f"1px solid {C_BORDER}", "paddingTop": "12px"}),
         ], style={"height": "calc(100vh - 48px)", "display": "flex", "flexDirection": "column",
-                  "padding": "14px 12px", "backgroundColor": C_SIDEBAR, "borderRight": f"1px solid {C_BORDER}"}),
+                  "padding": "16px 12px", "backgroundColor": C_SIDEBAR}),
                  width=2, className="p-0"),
 
         # Chat
         dbc.Col(html.Div([
             html.Div(id="chat-messages", children=make_welcome(),
-                     style={"flex": "1", "overflowY": "auto", "padding": "14px 20px", "backgroundColor": C_BG}),
+                     style={"flex": "1", "overflowY": "auto", "padding": "20px 32px", "backgroundColor": C_BG}),
             html.Div([
                 dbc.InputGroup([
                     dbc.Input(id="user-input", placeholder="Ask a question...", type="text",
                               n_submit=0, debounce=False,
-                              style={"borderRadius": "8px 0 0 8px", "border": f"1px solid {C_BORDER}",
-                                     "padding": "9px 14px", "fontSize": "0.88em", "boxShadow": "none"}),
-                    dbc.Button(html.I(className="bi bi-arrow-up"), id="send-btn", color="danger", n_clicks=0,
-                               style={"borderRadius": "0 8px 8px 0", "padding": "9px 14px"}),
+                              style={"borderRadius": "12px 0 0 12px", "border": f"1px solid {C_BORDER}",
+                                     "padding": "12px 16px", "fontSize": "0.9em", "boxShadow": "none",
+                                     "backgroundColor": C_SURFACE_TOP, "color": C_TEXT}),
+                    dbc.Button(html.I(className="bi bi-arrow-up"), id="send-btn", n_clicks=0,
+                               style={"borderRadius": "0 12px 12px 0", "padding": "12px 16px",
+                                      "backgroundColor": C_PRIMARY, "border": "none", "color": "white"}),
                 ]),
-            ], style={"padding": "10px 20px 12px", "backgroundColor": C_SURFACE, "borderTop": f"1px solid {C_BORDER}"}),
+            ], style={"padding": "12px 32px 16px", "backgroundColor": C_SURFACE_MID,
+                      "borderTop": f"1px solid {C_BORDER}"}),
         ], style={"position": "relative", "height": "calc(100vh - 48px)", "display": "flex", "flexDirection": "column"}),
                  width=7, className="p-0"),
 
         # Right panel
         dbc.Col(html.Div([
-            html.Div("Warnings", style={"fontSize": "0.72em", "fontWeight": "600", "color": C_MUTED,
-                                          "textTransform": "uppercase", "letterSpacing": "0.05em", "marginBottom": "8px"}),
+            html.Div("Warnings", style={"fontSize": "0.65em", "fontWeight": "700", "color": C_MUTED,
+                                          "textTransform": "uppercase", "letterSpacing": "0.12em", "marginBottom": "12px"}),
             html.Div(id="warnings-panel", children=[
                 html.Span("No warnings", style={"color": C_MUTED, "fontSize": "0.82em"})]),
         ], style={"height": "calc(100vh - 48px)", "display": "flex", "flexDirection": "column",
-                  "padding": "14px 12px", "borderLeft": f"1px solid {C_BORDER}",
-                  "backgroundColor": C_SURFACE, "overflowY": "auto"}), width=3, className="p-0"),
+                  "padding": "16px 14px",
+                  "backgroundColor": C_SIDEBAR, "overflowY": "auto"}), width=3, className="p-0"),
     ], className="g-0"),
 
     # Stores
@@ -233,7 +270,8 @@ app.layout = html.Div([
     dcc.Store(id="pending-new-chat", data=None),
     dcc.Interval(id="session-loader", interval=1000, max_intervals=1),
 ], style={"height": "100vh", "overflow": "hidden",
-          "fontFamily": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"})
+          "fontFamily": "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          "backgroundColor": C_HEADER})
 
 
 # -- Session persistence: save/load conversations to Delta --
@@ -639,10 +677,10 @@ def _warn_list(warnings):
             ts = ""
         warning_els = [
             html.Div(text, style={
-                "padding": "4px 8px", "backgroundColor": "#fffbeb",
-                "border": "1px solid #fde68a", "borderRadius": "6px",
-                "fontSize": "0.72em", "color": C_WARNING,
-                "lineHeight": "1.3", "maxHeight": "60px", "overflowY": "auto",
+                "padding": "8px 12px", "backgroundColor": "rgba(217,119,6,0.1)",
+                "border": "1px solid rgba(217,119,6,0.3)", "borderRadius": "8px",
+                "fontSize": "0.75em", "color": C_TEXT,
+                "lineHeight": "1.4", "maxHeight": "80px", "overflowY": "auto",
             }),
         ]
         if ts:
