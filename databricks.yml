@@ -89,6 +89,7 @@ targets:
     workspace:
       host: https://e2-demo-field-eng.cloud.databricks.com/
       profile: e2-demo_latest
+      root_path: ~/aia-multi-agent
 
   # --- Production (placeholder) -------------------------------------------
   # Currently points to the same workspace. Update host/profile when a
