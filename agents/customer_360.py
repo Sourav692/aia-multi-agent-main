@@ -37,12 +37,12 @@ import json
 import time
 import os
 import hashlib
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Generator
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage
 from databricks_langchain import ChatDatabricks
 from mlflow.pyfunc import ResponsesAgent
-from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
+from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
 from mlflow.entities.span import SpanType
 from mlflow.models import set_model
 from rich.console import Console
@@ -585,7 +585,7 @@ def _save_episodic_memory(thread_id, user_id, question, intent, domain, agents_u
         agents_sql = ", ".join([f"'{a}'" for a in agents_used])
         q_esc = question.replace("'", "''")
         lesson_sql = (
-            f"'{lesson_learned.replace(chr(39), chr(39)*2).replace(chr(10), " ").replace(chr(13), "")}'"
+            f"'{lesson_learned.replace(chr(39), chr(39)*2).replace(chr(10), ' ').replace(chr(13), '')}'"
             if lesson_learned else "NULL"
         )
         _run_sql(f"""
@@ -1209,8 +1209,13 @@ def route_to_multi_tool(state):
 
 # COMMAND ----------
 
-@mlflow.trace(name="compose_answer", span_type=SpanType.CHAIN)
-def compose_answer(state):
+
+def _build_compose_prompt(state):
+    """Build the compose prompt from agent results, memory, and context.
+
+    Shared by compose_answer (non-streaming) and predict_stream (streaming).
+    Returns the prompt string ready for the LLM.
+    """
     question = state["user_question"]
     intent = state.get("intent", "unknown")
     assets = state.get("resolved_assets", {})
@@ -1229,13 +1234,10 @@ def compose_answer(state):
         context_parts.append(f"**Documents:**\n{doc_text}")
 
     # ── Conversation history injection ───────────────────────────────
-    # When no agent results are available (e.g. context-synthesis questions
-    # classified as conversational), inject prior conversation Q&A so the
-    # LLM can answer from history rather than saying "no data available".
     if not context_parts:
         _msgs = state.get("messages", [])
         _history_pairs = []
-        for m in _msgs[:-1]:  # exclude the current question
+        for m in _msgs[:-1]:
             _role = m.get("role", "")
             _content = m.get("content", "")
             if _role in ("user", "assistant") and _content:
@@ -1245,7 +1247,6 @@ def compose_answer(state):
                 "**Conversation History (use this data to answer):**\n"
                 + "\n\n".join(_history_pairs)
             )
-    # ────────────────────────────────────────────────────────────────────
 
     domain = assets.get("domain", "unknown") if assets else "unknown"
     lessons = _get_episodic_lessons(intent, domain)
@@ -1297,9 +1298,15 @@ Instructions:
 - When the answer warrants detail (trends, analysis, comparisons), provide thorough explanations.
 - For simple KPI questions, keep it brief. For complex analysis, be detailed and insightful.
 - Use markdown when it helps readability (e.g., tables for comparisons, bold for key figures).
-- If you know the user's name from the User preferences section, address them by name naturally.
+- If you know the user\'s name from the User preferences section, address them by name naturally.
 - If the context includes Conversation History, use the data and numbers from prior answers to synthesize your response. Do not say you lack data \u2014 the prior answers ARE your data source.{warning_text}{clarification_text}"""
 
+    return compose_prompt
+
+
+@mlflow.trace(name="compose_answer", span_type=SpanType.CHAIN)
+def compose_answer(state):
+    compose_prompt = _build_compose_prompt(state)
     response = llm.invoke([HumanMessage(content=compose_prompt)])
     state["final_answer"] = response.content
     return state
@@ -1614,6 +1621,237 @@ class SupervisorResponsesAgent(ResponsesAgent):
             ],
             custom_outputs=custom_outputs,
         )
+
+    def _parse_request(self, request):
+        """Parse a ResponsesAgentRequest into user_message, new_msgs, thread_id, user_id.
+
+        Shared by predict and predict_stream to avoid duplicating message parsing logic.
+        """
+        user_message = None
+        new_msgs = []
+        for item in request.input:
+            role = getattr(item, "role", "user")
+            content = getattr(item, "content", "")
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if hasattr(part, "text"):
+                        text_parts.append(part.text)
+                    elif isinstance(part, dict) and "text" in part:
+                        text_parts.append(part["text"])
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                content = " ".join(text_parts)
+            elif not isinstance(content, str):
+                content = str(content) if content else ""
+            new_msgs.append({"role": role, "content": content})
+            if role == "user":
+                user_message = content
+
+        custom_inputs = {}
+        if hasattr(request, "custom_inputs") and request.custom_inputs:
+            custom_inputs = request.custom_inputs if isinstance(request.custom_inputs, dict) else {}
+        thread_id = custom_inputs.get("thread_id")
+        user_id = custom_inputs.get("user_id")
+
+        return user_message, new_msgs, thread_id, user_id
+
+    @mlflow.trace(span_type=SpanType.AGENT)
+    def predict_stream(
+        self, request: ResponsesAgentRequest
+    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
+        """Streaming version of predict.
+
+        Runs the data-gathering nodes (classify_intent, resolve_assets,
+        genie/multi_tool) non-streaming, then streams the compose_answer
+        LLM call token-by-token for real-time UI rendering.
+        """
+        user_message, new_msgs, thread_id, user_id = self._parse_request(request)
+
+        if not user_message:
+            yield ResponsesAgentStreamEvent(
+                type="response.output_item.done",
+                item=self.create_text_output_item(
+                    text="Please ask a question.", id="msg_empty"
+                ),
+            )
+            return
+
+        # Tag MLflow trace with session ID
+        if thread_id:
+            mlflow.update_current_trace(metadata={"mlflow.trace.session": thread_id})
+
+        # ---- Build full message list: in-memory history + new messages ----
+        history = self._conversation_history.get(thread_id, []) if thread_id else []
+        if not history and thread_id:
+            prior_state = _load_checkpoint(thread_id)
+            if prior_state and prior_state.get("messages"):
+                history = prior_state["messages"]
+
+        all_messages = history + new_msgs
+        if len(all_messages) > MAX_MESSAGES:
+            all_messages = all_messages[-MAX_MESSAGES:]
+
+        state = {
+            "messages": all_messages,
+            "user_question": user_message,
+            "intent": "",
+            "intent_confidence": 0.0,
+            "clarification_message": None,
+            "needs_clarification": False,
+            "resolved_assets": None,
+            "genie_results": None,
+            "multi_tool_results": None,
+            "final_answer": None,
+            "warnings": [],
+            "thread_id": thread_id,
+            "user_id": user_id,
+        }
+
+        log_flow_start(user_message, thread_id, user_id)
+        _flow_start = time.time()
+
+        # ── Run data-gathering nodes (non-streaming) ──────────────────
+        state = classify_intent(state)
+        if should_clarify(state) == "clarify":
+            state = clarify_or_disambiguate(state)
+        state = resolve_assets_with_context_index(state)
+
+        route = route_by_intent(state)
+        if route == "genie":
+            state = route_to_genie(state)
+        elif route == "multi_tool":
+            state = route_to_multi_tool(state)
+        # conversational intent: skip sub-agents, go directly to compose
+
+        # ── Stream compose_answer LLM call ────────────────────────────
+        compose_prompt = _build_compose_prompt(state)
+        full_answer = ""
+        for chunk in llm.stream([HumanMessage(content=compose_prompt)]):
+            delta = chunk.content if hasattr(chunk, "content") else ""
+            if delta:
+                full_answer += delta
+                yield ResponsesAgentStreamEvent(
+                    **self.create_text_delta(delta=delta, item_id="msg_answer"),
+                )
+
+        state["final_answer"] = full_answer
+        _flow_duration = time.time() - _flow_start
+        answer = full_answer or "I was unable to process your question."
+
+        # Yield the final text output item (aggregates all deltas)
+        yield ResponsesAgentStreamEvent(
+            type="response.output_item.done",
+            item=self.create_text_output_item(text=answer, id="msg_answer"),
+        )
+
+        # ── Post-processing: memory, checkpoints, episodic ────────────
+        if thread_id:
+            updated_history = history + new_msgs + [{"role": "assistant", "content": answer}]
+            self._conversation_history[thread_id] = updated_history
+
+        checkpoint_id = None
+        if thread_id:
+            checkpoint_data = {
+                "messages": all_messages + [{"role": "assistant", "content": answer}],
+                "intent": state.get("intent"),
+                "domain": state.get("resolved_assets", {}).get("domain") if state.get("resolved_assets") else None,
+            }
+            checkpoint_id = _save_checkpoint(thread_id, checkpoint_data)
+
+        agents_used = []
+        if state.get("genie_results"):
+            agents_used.append("genie")
+        if state.get("multi_tool_results"):
+            agents_used.append("multi_tool")
+        ep_domain = state.get("resolved_assets", {}).get("domain", "unknown") if state.get("resolved_assets") else "unknown"
+        has_errors = any(r.get("status") == "failed" for r in [
+            state.get("genie_results", {}), state.get("multi_tool_results", {}),
+        ] if isinstance(r, dict))
+        ep_outcome = "failed" if has_errors and not answer else "success"
+
+        lesson = _generate_lesson_learned(
+            question=user_message,
+            intent=state.get("intent", "unknown"),
+            result=state,
+            outcome=ep_outcome,
+        )
+
+        _save_episodic_memory(
+            thread_id=thread_id or "anonymous",
+            user_id=user_id or "anonymous",
+            question=user_message,
+            intent=state.get("intent", "unknown"),
+            domain=ep_domain,
+            agents_used=agents_used,
+            outcome=ep_outcome,
+            lesson_learned=lesson,
+        )
+
+        intent = state.get("intent", "")
+        if intent in ("conversational", "unknown", "greeting"):
+            _extract_and_save_user_facts(user_id or "default", user_message, answer)
+        elif intent in ("simple_kpi", "document_lookup"):
+            _extract_implicit_signals(
+                user_id or "default", user_message, intent,
+                resolved_assets=state.get("resolved_assets"),
+            )
+
+        nodes_executed = [n for n in [
+            "classify_intent",
+            "clarify_or_disambiguate" if state.get("clarification_message") else None,
+            "resolve_assets",
+            "genie" if state.get("genie_results") else None,
+            "multi_tool" if state.get("multi_tool_results") else None,
+            "compose_answer",
+        ] if n is not None]
+
+        resolved = state.get("resolved_assets", {})
+        domain = resolved.get("domain", "unknown") if resolved else "unknown"
+
+        agent_details = {}
+        if state.get("genie_results"):
+            gr = state["genie_results"]
+            agent_details["genie"] = {
+                "status": gr.get("status", "unknown"),
+                "space_id": gr.get("space_id"),
+                "display_name": gr.get("display_name"),
+                "sql": gr.get("sql", "")[:120] if gr.get("sql") else None,
+                "row_count": gr.get("row_count"),
+                "spaces_tried": len(gr.get("attempts", [])),
+            }
+        if state.get("multi_tool_results"):
+            mt = state["multi_tool_results"]
+            agent_details["multi_tool"] = {
+                "docs_found": len(mt.get("docs", [])) if mt.get("docs") else 0,
+                "doc_vs_index": resolved.get("doc_vs_index") if resolved else None,
+            }
+
+        custom_outputs = {
+            "intent": state.get("intent", "unknown"),
+            "intent_confidence": state.get("intent_confidence", 0.0),
+            "domain": domain,
+            "genie_space": resolved.get("genie_space") if resolved else None,
+            "doc_vs_index": resolved.get("doc_vs_index") if resolved else None,
+            "warnings": state.get("warnings", []),
+            "clarification": state.get("clarification_message"),
+            "nodes_executed": nodes_executed,
+            "agent_details": agent_details,
+            "thread_id": thread_id,
+            "checkpoint_id": checkpoint_id,
+        }
+
+        metadata_json = json.dumps(custom_outputs)
+
+        log_flow_end(state, duration_s=_flow_duration)
+
+        # Yield metadata as a separate output item
+        yield ResponsesAgentStreamEvent(
+            type="response.output_item.done",
+            item=self.create_text_output_item(text=metadata_json, id="msg_metadata"),
+        )
+
+
 
 
 agent = SupervisorResponsesAgent()

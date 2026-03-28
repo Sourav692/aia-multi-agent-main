@@ -35,9 +35,9 @@ import shutil, os
 
 notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 notebook_dir = os.path.dirname(notebook_path)  # e.g. /Users/.../aia-multi-agent/agents
-agent_source = f"/Workspace{notebook_dir}/agent_code.py"
+agent_source = f"/Workspace{notebook_dir}/customer_360.py"
 
-agent_file_path = "/tmp/agent_code.py"
+agent_file_path = "/tmp/customer_360.py"
 shutil.copy(agent_source, agent_file_path)
 print(f"Agent code copied from {agent_source} to {agent_file_path}")
 
@@ -72,7 +72,8 @@ resources = [
     DatabricksServingEndpoint(endpoint_name="databricks-claude-opus-4-6"),
     DatabricksSQLWarehouse(warehouse_id="4b9b953939869799"),
     DatabricksVectorSearchIndex(index_name=f"{CATALOG}.ai_ops.context_index_vs"),
-    DatabricksVectorSearchIndex(index_name=f"{CATALOG}.ai_ops.policy_docs_vs"),
+    # TODO: Re-add once the policy_docs_vs index is created
+    # DatabricksVectorSearchIndex(index_name=f"{CATALOG}.ai_ops.policy_docs_vs"),
     DatabricksGenieSpace(genie_space_id="01f1272d4ba6144ba75d868762f1925d"),
     DatabricksGenieSpace(genie_space_id="01f1272d4c6b1fb49223785ab841befd"),
     DatabricksGenieSpace(genie_space_id="01f1272d4d271203ad122e9280470248"),
@@ -152,11 +153,11 @@ def extract_answer(response):
                     return content[0].get('text', '')
     return str(response)
 
-THREAD_ID = "model-validation-thread"
-USER_ID = "model-validation-user"
+THREAD_ID = "model-validation-thread1"
+USER_ID = "model-validation-user1"
 
 questions = [
-    "What is the total number of claims submitted by region for the last 3 months?",
+    "What is the total number of claims submitted by region for the last three calendar months include current month?",
     "Show me the total premium collected by product type across all regions.",
     "Based on those two results \u2014 the claims by region and premium by product \u2014 which regions are generating the most premium but also have the highest claim volumes? Are there any regions where we might be underpriced?",
 ]
@@ -226,7 +227,7 @@ client = DatabricksOpenAI()
 # Query the endpoint — same as what the playground does
 response = client.responses.create(
     model="agents_aia_multi_agent_catalog-ai_ops-supervisor_agent",
-    input=[{"role": "user", "content": "What is the total number of claims submitted by region for the last 3 months?"}],
+    input=[{"role": "user", "content": "What is the total number of claims submitted by region for the last three calendar months include current month?"}],
     extra_body={
         "custom_inputs": {"thread_id": "playground-test", "user_id": "playground-test-user"},
     },
@@ -252,9 +253,9 @@ ENDPOINT = "agents_aia_multi_agent_catalog-ai_ops-supervisor_agent"
 THREAD = f"multi-turn-v11-{int(time.time())}"
 
 questions = [
-    "What is the total number of claims submitted by region for the last 3 months?",
+    "What is the total number of claims submitted by region for the last three calendar months include current month?",
     "Now show me the total premium collected by product type across all regions.",
-    "Based on those two results, which regions generate the most premium but also have the highest claim volumes? Are there any regions where we might be underpriced?",
+    "Based on those two results — the claims by region and premium by product — which regions are generating the most premium but also have the highest claim volumes? Are there any regions where we might be underpriced?",
 ]
 
 conversation = []
@@ -313,3 +314,6 @@ for i, q in enumerate(questions, 1):
 print(f"{'='*80}")
 print(f"Multi-turn test complete — thread: {THREAD}")
 print(f"All {len(questions)} questions processed via OBO Genie auth (v11)")
+
+# COMMAND ----------
+
