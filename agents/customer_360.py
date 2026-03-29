@@ -41,6 +41,7 @@ from typing import TypedDict, Optional, Generator
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage
 from databricks_langchain import ChatDatabricks
+from databricks_langchain.genie import GenieAgent
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse, ResponsesAgentStreamEvent
 from mlflow.entities.span import SpanType
@@ -1029,51 +1030,51 @@ def _record_asset_feedback(agent_name, domain, feedback_type, details, state):
 
 # COMMAND ----------
 
-def _get_genie_client():
-    """Return a WorkspaceClient configured for Genie API calls.
+_genie_agent_cache = {}
+
+
+def _get_or_create_genie_agent(space_id):
+    """Get a cached GenieAgent for the given space_id, or create one.
 
     In Model Serving, uses on-behalf-of (OBO) user credentials so that
     Genie queries execute under the calling user's identity — inheriting
     their UC table permissions automatically. No manual SP grants needed.
     Falls back to default credentials (user PAT) in notebooks.
     """
+    if space_id in _genie_agent_cache:
+        return _genie_agent_cache[space_id]
+
     from databricks.sdk import WorkspaceClient
     try:
         from databricks_ai_bridge import ModelServingUserCredentials
-        return WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
+        client = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
     except Exception:
-        return WorkspaceClient()
+        client = WorkspaceClient()
+
+    agent = GenieAgent(
+        genie_space_id=space_id,
+        genie_agent_name="Genie",
+        description="Genie Agent for text-to-SQL",
+        include_context=True,
+        client=client,
+    )
+    _genie_agent_cache[space_id] = agent
+    return agent
 
 
-def _query_genie_space(w, space_id, question):
-    """Call the Genie API for a single space and return a result dict."""
+def _query_genie_space(space_id, question):
+    """Query a single Genie Space via GenieAgent and return a result dict."""
     try:
-        conversation = w.genie.start_conversation(space_id=space_id, content=question)
-        for _ in range(30):
-            msg = w.genie.get_message(
-                space_id=space_id,
-                conversation_id=conversation.conversation_id,
-                message_id=conversation.message_id,
-            )
-            if msg.status and msg.status.value in ["COMPLETED", "FAILED"]:
-                break
-            time.sleep(2)
-
-        if msg.status and msg.status.value == "COMPLETED":
-            sql_query, result_data = None, None
-            if msg.attachments:
-                for att in msg.attachments:
-                    if att.query and att.query.query:
-                        sql_query = att.query.query
-                    if att.text and att.text.content:
-                        result_data = att.text.content
-            return {
-                "sql": sql_query,
-                "result_summary": result_data or "No result text",
-                "status": "success",
-            }
-        else:
-            return {"error": f"Genie status: {msg.status}", "status": "failed"}
+        agent = _get_or_create_genie_agent(space_id)
+        agent_result = agent.invoke({"messages": [{"role": "user", "content": question}]})
+        msgs = agent_result.get("messages", [])
+        sql_query = next((m.content for m in msgs if getattr(m, "name", "") == "query_sql"), None)
+        result_text = next((m.content for m in msgs if getattr(m, "name", "") == "query_result"), None)
+        return {
+            "sql": sql_query,
+            "result_summary": result_text or "No result text",
+            "status": "success",
+        }
     except Exception as e:
         return {"error": str(e)[:200], "status": "failed"}
 
@@ -1091,10 +1092,6 @@ def route_to_genie(state):
     if _hints:
         question = question + "\n[Schema hints from past queries: " + " | ".join(_hints[:2]) + "]"
 
-    # OBO auth: in Model Serving, Genie calls run as the calling user
-    # (inherits their UC table permissions). No manual SP grants needed.
-    w = _get_genie_client()
-
     genie_spaces = state.get("resolved_assets", {}).get("genie_spaces", [])
     if not genie_spaces:
         single = state.get("resolved_assets", {}).get("genie_space")
@@ -1111,7 +1108,7 @@ def route_to_genie(state):
     attempts = []
     for space_info in genie_spaces:
         space_id = space_info["space_id"]
-        result = _query_genie_space(w, space_id, question)
+        result = _query_genie_space(space_id, question)
         attempt = {
             **result,
             "space_id": space_id,

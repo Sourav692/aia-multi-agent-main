@@ -1,4 +1,3 @@
-# Databricks notebook source
 # MAGIC %md
 # MAGIC # Supervisor Agent — AIA Multi-Agent System
 # MAGIC

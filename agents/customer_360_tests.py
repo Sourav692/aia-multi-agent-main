@@ -25,7 +25,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./agent_code
+# MAGIC %run ./customer_360
 
 # COMMAND ----------
 
