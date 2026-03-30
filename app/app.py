@@ -5,7 +5,7 @@ Instant thinking animation via assets/thinking.js (raw JS outside Dash/React).
 
 import os, json, uuid, time, requests
 import dash
-from dash import html, dcc, Input, Output, State, callback, ALL, ctx, no_update
+from dash import html, dcc, Input, Output, State, callback, ALL, MATCH, ctx, no_update
 import dash_bootstrap_components as dbc
 
 AGENT_ENDPOINT = os.getenv("SERVING_ENDPOINT_NAME", "agents_aia_multi_agent_catalog-ai_ops-supervisor_agent")
@@ -68,8 +68,8 @@ SAMPLE_QUESTIONS = [
 AGENT_COLORS = {"Genie": "#007954", "Multi-Tool": "#3131c0", "Analysis": "#d97706", "Visualization": "#c0392b"}
 
 
-def _make_ai_bubble(answer, warnings, clarification, dashboard_urls, msg_offset=0, timestamp=None):
-    """Build AI answer elements: bubble with warning icon, clarification, dashboards."""
+def _make_ai_bubble(answer, warnings, clarification, dashboard_urls, msg_offset=0, timestamp=None, exchange_index=0):
+    """Build AI answer elements: bubble with warning icon, clarification, dashboards, review controls."""
     elements = []
     ai_content = [dcc.Markdown(answer, style={"margin": 0})]
     if warnings:
@@ -103,6 +103,42 @@ def _make_ai_bubble(answer, warnings, clarification, dashboard_urls, msg_offset=
     if timestamp:
         elements.append(html.Div(timestamp, style={
             "fontSize": "0.65em", "color": C_MUTED, "marginTop": "2px", "marginBottom": "8px"}))
+
+    # -- Review controls: star rating + feedback textarea + submit --
+    eidx = exchange_index
+    star_unfilled = {"color": C_MUTED, "cursor": "pointer", "fontSize": "1.1em", "padding": "0 2px",
+                     "transition": "color 0.15s ease", "background": "none", "border": "none"}
+    stars = [html.Button(
+        html.I(className="bi bi-star"),
+        id={"type": "star-btn", "msg": eidx, "star": s},
+        n_clicks=0,
+        style=star_unfilled,
+    ) for s in range(1, 6)]
+
+    review_row = html.Div([
+        html.Div(stars, style={"display": "flex", "alignItems": "center", "gap": "2px"}),
+        html.Div([
+            dbc.Textarea(
+                id={"type": "feedback-input", "msg": eidx},
+                placeholder="Share your feedback (optional)...",
+                style={"backgroundColor": C_SURFACE_MID, "color": C_TEXT, "border": f"1px solid {C_BORDER}",
+                       "borderRadius": "8px", "fontSize": "0.78em", "resize": "vertical",
+                       "minHeight": "50px", "maxHeight": "120px", "marginTop": "6px"},
+                rows=2,
+            ),
+            dbc.Button("Submit Review", id={"type": "submit-review-btn", "msg": eidx}, n_clicks=0,
+                       size="sm", style={"marginTop": "6px", "backgroundColor": C_PRIMARY,
+                                         "border": "none", "borderRadius": "6px", "fontSize": "0.75em",
+                                         "padding": "4px 14px", "color": "white"}),
+        ], id={"type": "feedback-section", "msg": eidx},
+           style={"display": "none", "marginTop": "4px"}),
+        html.Div(id={"type": "review-status", "msg": eidx},
+                 style={"display": "none", "fontSize": "0.75em", "color": C_SUCCESS, "marginTop": "4px"}),
+        # Hidden store to track selected rating for this message
+        dcc.Store(id={"type": "star-rating-store", "msg": eidx}, data=0),
+    ], style={"maxWidth": "85%", "marginBottom": "12px", "paddingLeft": "4px"})
+    elements.append(review_row)
+
     return elements
 
 
@@ -268,6 +304,7 @@ app.layout = html.Div([
     dcc.Store(id="chat-history", data=[]),
     dcc.Store(id="pending-question", data=None),
     dcc.Store(id="pending-new-chat", data=None),
+    dcc.Store(id="review-meta", data=[]),
     dcc.Interval(id="session-loader", interval=1000, max_intervals=1),
 ], style={"height": "100vh", "overflow": "hidden",
           "fontFamily": "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -546,6 +583,7 @@ def load_session(n_intervals, already_loaded):
     Output("all-conversations", "data"),
     Output("active-conversation-id", "data"),
     Output("conversation-list", "children"),
+    Output("review-meta", "data"),
     Input("pending-question", "data"),
     Input("pending-new-chat", "data"),
     Input({"type": "conv-item", "index": ALL}, "n_clicks"),
@@ -553,28 +591,31 @@ def load_session(n_intervals, already_loaded):
     State("chat-history", "data"),
     State("all-conversations", "data"),
     State("active-conversation-id", "data"),
+    State("review-meta", "data"),
     prevent_initial_call=True,
 )
-def unified_callback(pending, new_chat, conv_clicks, current_messages, history, all_convs, active_conv_id):
+def unified_callback(pending, new_chat, conv_clicks, current_messages, history, all_convs, active_conv_id, review_meta):
     triggered = ctx.triggered_id
     all_convs = all_convs or {}
+    review_meta = review_meta or []
     no_w = [html.Span("No warnings", style={"color": C_MUTED, "fontSize": "0.82em"})]
 
     # -- New Chat --
     if triggered == "pending-new-chat":
-        return (make_welcome(), [], no_w, all_convs, None, build_sidebar_list(all_convs, None))
+        return (make_welcome(), [], no_w, all_convs, None, build_sidebar_list(all_convs, None), [])
 
     # -- Switch Conversation --
     if isinstance(triggered, dict) and triggered.get("type") == "conv-item":
         clicked_id = triggered.get("index")
         if not clicked_id or clicked_id == active_conv_id:
-            return (no_update,) * 6
+            return (no_update,) * 7
         conv = all_convs.get(clicked_id)
         if not conv:
-            return (no_update,) * 6
+            return (no_update,) * 7
         messages = conv.get("messages", [])
         msgs = make_welcome()
         exchanges = conv.get("exchanges", [])
+        restored_review_meta = []
         for i in range(0, len(messages), 2):
             user_msg = messages[i] if i < len(messages) else None
             ai_msg = messages[i + 1] if i + 1 < len(messages) else None
@@ -593,14 +634,22 @@ def unified_callback(pending, new_chat, conv_clicks, current_messages, history, 
                 reply_ts = ex.get("reply_ts", "")
                 msgs.extend(_make_ai_bubble(ai_msg["content"], ex.get("warnings", []),
                                             ex.get("clarification"), ex.get("dashboard_urls", []),
-                                            len(msgs), timestamp=reply_ts))
+                                            len(msgs), timestamp=reply_ts, exchange_index=ex_idx))
+                restored_review_meta.append({
+                    "thread_id": conv.get("thread_id", ""),
+                    "question": user_msg["content"] if user_msg else "",
+                    "intent": ex.get("intent", "unknown"),
+                    "domain": ex.get("domain", "unknown"),
+                    "agents_used": ex.get("agents_used", []),
+                })
         w_list = _warn_list(conv.get("all_warnings", [])) or no_w
-        return msgs, messages, w_list, all_convs, clicked_id, build_sidebar_list(all_convs, clicked_id)
+        return (msgs, messages, w_list, all_convs, clicked_id,
+                build_sidebar_list(all_convs, clicked_id), restored_review_meta)
 
     # -- Process Agent Question --
     if triggered == "pending-question":
         if not pending or not pending.get("question"):
-            return (no_update,) * 6
+            return (no_update,) * 7
 
         question = pending["question"]
 
@@ -624,19 +673,22 @@ def unified_callback(pending, new_chat, conv_clicks, current_messages, history, 
         result = call_agent(question, history or [], thread_id=conv_thread_id)
         reply_ts = time.strftime("%H:%M:%S")
 
+        # Determine exchange index for review controls
+        conv = all_convs.get(active_conv_id, {})
+        exchange_index = len(conv.get("exchanges", []))
+
         if result.get("trace"):
             current_messages.append(make_thinking_block(result["trace"]))
 
         current_messages.extend(_make_ai_bubble(
             result["answer"], result.get("warnings", []),
             result.get("clarification"), result.get("dashboard_urls", []),
-            len(current_messages), timestamp=reply_ts))
+            len(current_messages), timestamp=reply_ts, exchange_index=exchange_index))
 
         history = history or []
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": result["answer"]})
 
-        conv = all_convs.get(active_conv_id, {})
         conv["messages"] = history
         conv.setdefault("exchanges", []).append({
             "trace": result.get("trace", []),
@@ -645,6 +697,8 @@ def unified_callback(pending, new_chat, conv_clicks, current_messages, history, 
             "dashboard_urls": result.get("dashboard_urls", []),
             "user_ts": now_ts,
             "reply_ts": reply_ts,
+            "intent": result.get("intent", "unknown"),
+            "domain": result.get("domain", "unknown"),
         })
         if result.get("warnings"):
             warn_ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -654,13 +708,23 @@ def unified_callback(pending, new_chat, conv_clicks, current_messages, history, 
         all_convs[active_conv_id] = conv
         w_list = _warn_list(conv.get("all_warnings", [])) or no_w
 
+        # Append review metadata for this exchange
+        review_meta.append({
+            "thread_id": conv_thread_id or "",
+            "question": question,
+            "intent": result.get("intent", "unknown"),
+            "domain": result.get("domain", "unknown"),
+            "agents_used": result.get("trace", []),
+        })
+
         # Persist sessions to Delta for page refresh survival
         _save_ui_session(all_convs)
 
         return (current_messages, history, w_list,
-                all_convs, active_conv_id, build_sidebar_list(all_convs, active_conv_id))
+                all_convs, active_conv_id, build_sidebar_list(all_convs, active_conv_id),
+                review_meta)
 
-    return (no_update,) * 6
+    return (no_update,) * 7
 
 
 def _warn_list(warnings):
@@ -689,6 +753,149 @@ def _warn_list(warnings):
             }))
         items.append(html.Div(warning_els, style={"marginBottom": "6px"}))
     return items
+
+
+# -- Star rating toggle: clicking a star fills it and all stars to its left --
+@callback(
+    Output({"type": "star-btn", "msg": MATCH, "star": ALL}, "children"),
+    Output({"type": "star-rating-store", "msg": MATCH}, "data"),
+    Output({"type": "feedback-section", "msg": MATCH}, "style"),
+    Input({"type": "star-btn", "msg": MATCH, "star": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_stars(star_clicks):
+    if not ctx.triggered_id:
+        return (no_update,) * 3
+    clicked_star = ctx.triggered_id.get("star", 0)
+    icons = []
+    for s in range(1, 6):
+        if s <= clicked_star:
+            icons.append(html.I(className="bi bi-star-fill", style={"color": C_WARNING}))
+        else:
+            icons.append(html.I(className="bi bi-star"))
+    feedback_style = {"display": "block", "marginTop": "4px"}
+    return icons, clicked_star, feedback_style
+
+
+# -- Submit review: write rating + feedback to episodic_memory --
+def _run_sql_strict(sql_statement):
+    """Execute SQL and raise on failure (unlike _run_sql which swallows errors)."""
+    from databricks.sdk import WorkspaceClient
+    w = WorkspaceClient()
+    response = w.statement_execution.execute_statement(
+        warehouse_id=SQL_WAREHOUSE_ID, statement=sql_statement, wait_timeout="30s",
+    )
+    state_val = None
+    try:
+        state_val = response.status.state.value if response.status and response.status.state else None
+    except Exception:
+        pass
+    if state_val != "SUCCEEDED":
+        error_msg = ""
+        try:
+            if response.status and response.status.error:
+                error_msg = response.status.error.message
+        except Exception:
+            pass
+        raise Exception(f"SQL failed: {error_msg}")
+    # Return num_affected_rows if available (for UPDATE/INSERT)
+    rows = []
+    try:
+        if response.result and response.result.data_array:
+            rows = response.result.data_array
+    except Exception:
+        pass
+    return rows
+
+
+@callback(
+    Output({"type": "review-status", "msg": MATCH}, "children"),
+    Output({"type": "review-status", "msg": MATCH}, "style"),
+    Input({"type": "submit-review-btn", "msg": MATCH}, "n_clicks"),
+    State({"type": "star-rating-store", "msg": MATCH}, "data"),
+    State({"type": "feedback-input", "msg": MATCH}, "value"),
+    State("all-conversations", "data"),
+    State("active-conversation-id", "data"),
+    State("chat-history", "data"),
+    prevent_initial_call=True,
+)
+def submit_review(n_clicks, rating, feedback, all_convs, active_conv_id, chat_history):
+    if not n_clicks or not rating:
+        return no_update, no_update
+
+    msg_index = ctx.triggered_id.get("msg", 0)
+    all_convs = all_convs or {}
+    chat_history = chat_history or []
+
+    # Extract thread_id and question from conversation state (works for both new and restored sessions)
+    conv = all_convs.get(active_conv_id, {}) if active_conv_id else {}
+    thread_id = conv.get("thread_id", "")
+
+    # Get the user question for this exchange index (messages alternate: user, assistant, user, assistant...)
+    question = ""
+    user_msg_idx = msg_index * 2  # exchange 0 → message 0, exchange 1 → message 2, etc.
+    messages = conv.get("messages", chat_history)
+    if user_msg_idx < len(messages):
+        question = messages[user_msg_idx].get("content", "") if isinstance(messages[user_msg_idx], dict) else ""
+
+    if not thread_id or not question:
+        return ("Could not identify the conversation. Please try again.",
+                {"display": "block", "fontSize": "0.75em", "color": C_DANGER, "marginTop": "4px"})
+
+    # Escape for SQL
+    escaped_question = question.replace("'", "''")
+    escaped_feedback = (feedback or "").replace("'", "''") if feedback else ""
+
+    # Get exchange metadata for intent/domain if available
+    exchanges = conv.get("exchanges", [])
+    ex_meta = exchanges[msg_index] if msg_index < len(exchanges) else {}
+    intent = ex_meta.get("intent", "unknown")
+    domain = ex_meta.get("domain", "unknown")
+
+    try:
+        import hashlib
+
+        # Try UPDATE existing episodic_memory row first
+        updated = False
+        if escaped_feedback:
+            update_sql = f"""
+                UPDATE {CATALOG}.ai_ops.episodic_memory
+                SET user_rating = {int(rating)}, lesson_learned = '{escaped_feedback}'
+                WHERE thread_id = '{thread_id}' AND question = '{escaped_question}'
+            """
+        else:
+            update_sql = f"""
+                UPDATE {CATALOG}.ai_ops.episodic_memory
+                SET user_rating = {int(rating)}
+                WHERE thread_id = '{thread_id}' AND question = '{escaped_question}'
+            """
+        result = _run_sql_strict(update_sql)
+        # Check if any rows were actually updated (result contains [['N']] for num_affected_rows)
+        if result and len(result) > 0 and result[0]:
+            try:
+                affected = int(result[0][0])
+                updated = affected > 0
+            except (ValueError, TypeError, IndexError):
+                pass
+
+        # If UPDATE matched nothing (agent didn't create the row), INSERT a new one
+        if not updated:
+            episode_id = hashlib.md5(f"{thread_id}:{question}:{time.time()}".encode()).hexdigest()[:20]
+            lesson_sql = f"'{escaped_feedback}'" if escaped_feedback else "NULL"
+            _run_sql_strict(f"""
+                INSERT INTO {CATALOG}.ai_ops.episodic_memory
+                (episode_id, thread_id, user_id, question, intent, domain,
+                 agents_used, outcome, user_rating, lesson_learned, created_at)
+                VALUES ('{episode_id}', '{thread_id}', 'default', '{escaped_question}',
+                        '{intent}', '{domain}', ARRAY('review'),
+                        'reviewed', {int(rating)}, {lesson_sql}, current_timestamp())
+            """)
+    except Exception as e:
+        return (f"Error saving review: {str(e)[:100]}",
+                {"display": "block", "fontSize": "0.75em", "color": C_DANGER, "marginTop": "4px"})
+
+    return ("Thank you for your feedback!",
+            {"display": "block", "fontSize": "0.75em", "color": C_SUCCESS, "marginTop": "4px"})
 
 
 if __name__ == "__main__":
